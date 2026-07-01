@@ -233,6 +233,16 @@ fn build_context(input: &Json) -> Result<EvaluationContext, Failed> {
     {
         ctx.zoom = Some(zoom);
     }
+    if let Some(images) = items
+        .first()
+        .and_then(|g| g.get("availableImages"))
+        .and_then(Json::as_array)
+    {
+        ctx.available_images = images
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+    }
 
     if let Some(feature_json) = items.get(1) {
         ctx.feature = build_feature(feature_json);
@@ -253,6 +263,12 @@ fn build_feature(json: &Json) -> Feature {
         if !id.is_null() {
             feature.id = Some(Value::from_json(id));
         }
+    }
+    if let Some(state) = json.get("featureState").and_then(Json::as_object) {
+        feature.state = state
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::from_json(v)))
+            .collect::<BTreeMap<_, _>>();
     }
     feature.geometry_type = geometry_type(json);
     feature
@@ -299,6 +315,9 @@ fn value_to_json(value: &Value) -> Json {
                 .map(|(k, v)| (k.clone(), value_to_json(v)))
                 .collect(),
         ),
+        Value::Image { name, available } => {
+            serde_json::json!({ "name": name, "available": available })
+        }
     }
 }
 

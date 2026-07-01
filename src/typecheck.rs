@@ -378,6 +378,11 @@ impl Checker {
             "coalesce" => return self.infer_coalesce(op, args, expected),
             "case" => return self.infer_case(op, args, expected),
 
+            "image" => {
+                let (a0, _) = self.infer(&args[0], Some(&Type::String))?;
+                mk(vec![a0], Type::ResolvedImage)
+            }
+
             _ => mk(self.infer_args(args)?, Type::Value),
         })
     }

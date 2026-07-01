@@ -184,6 +184,21 @@ impl Evaluator<'_> {
                     .cloned()
                     .unwrap_or(Value::Null))
             }
+            "feature-state" => {
+                let key = self.eval_string(&args[0])?;
+                Ok(self
+                    .ctx
+                    .feature
+                    .state
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or(Value::Null))
+            }
+            "image" => {
+                let name = self.eval_string(&args[0])?;
+                let available = self.ctx.available_images.iter().any(|n| n == &name);
+                Ok(Value::Image { name, available })
+            }
             "typeof" => Ok(Value::String(type_string(&self.eval(&args[0])?))),
 
             // --- collections ---
@@ -419,18 +434,18 @@ impl Evaluator<'_> {
     }
 
     fn op_coalesce(&mut self, args: &[Expr]) -> Result<Value> {
-        let mut last_err = None;
         for a in args {
             match self.eval(a) {
                 Ok(Value::Null) => continue,
+                // An unavailable image is skipped, like a null.
+                Ok(Value::Image {
+                    available: false, ..
+                }) => continue,
                 Ok(v) => return Ok(v),
-                Err(e) => last_err = Some(e),
+                Err(_) => continue,
             }
         }
-        match last_err {
-            Some(_) => Ok(Value::Null),
-            None => Ok(Value::Null),
-        }
+        Ok(Value::Null)
     }
 
     fn op_eq(&mut self, args: &[Expr], want_equal: bool) -> Result<Value> {
@@ -690,6 +705,7 @@ fn type_string(v: &Value) -> String {
         Value::Bool(_) => "boolean".to_string(),
         Value::Number(_) => "number".to_string(),
         Value::String(_) => "string".to_string(),
+        Value::Image { .. } => "resolvedImage".to_string(),
         Value::Color(_) => "color".to_string(),
         Value::Object(_) => "object".to_string(),
         Value::Array(items) => {
@@ -871,6 +887,7 @@ fn to_string_value(v: &Value) -> String {
         Value::Number(n) => crate::value::format_number(*n),
         Value::String(s) => s.clone(),
         Value::Color(c) => c.to_string(),
+        Value::Image { name, .. } => name.clone(),
         Value::Array(_) | Value::Object(_) => json_string(v),
     }
 }
@@ -893,6 +910,9 @@ fn json_string(v: &Value) -> String {
                 .map(|(k, val)| format!("{k:?}:{}", json_string(val)))
                 .collect();
             format!("{{{}}}", parts.join(","))
+        }
+        Value::Image { name, available } => {
+            format!("{{\"name\":{name:?},\"available\":{available}}}")
         }
     }
 }

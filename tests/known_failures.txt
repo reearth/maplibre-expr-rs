@@ -1,12 +1,11 @@
 # Fixtures not yet passing, reported as `ignored` by the spec harness. Grouped
 # by reason so it doubles as a roadmap. Nothing is skipped silently.
 
-# === Legacy stop-function / collator object syntax (the expression is a JSON
-# object, not an expression array). Out of scope for now.  (1 fixtures) ===
+# === Legacy stop-function / collator object syntax (JSON object, not an array).  (1 fixtures) ===
 equal/collator-value
 
-# === Operators not yet implemented (distance/within/collator/format/image/
-# number-format/feature-state/resolved-locale/is-supported-script/geo/locale).  (156 fixtures) ===
+# === Operators not yet implemented (legacy/distance/within/collator/format/
+# number-format/resolved-locale/is-supported-script/geo/locale builtins).  (147 fixtures) ===
 collator/accent-equals-de
 collator/accent-lt-en
 collator/accent-not-equals-en
@@ -63,8 +62,6 @@ distance/multi-line
 distance/multi-point
 distance/multi-polygon
 elevation/basic
-feature-state/basic
-feature-state/expression-arg
 format/basic
 format/coercion
 format/data-driven-font
@@ -76,13 +73,6 @@ format/implicit-omit
 format/multiple-styles
 format/to-string
 heatmap-density/basic
-image/basic
-image/coalesce
-image/compound
-image/invalid-image-name/boolean
-image/invalid-image-name/non-string-expression
-image/invalid-image-name/null
-image/invalid-image-name/number
 is-supported-script/default
 legacy/categorical/array
 legacy/categorical/array-default
@@ -164,8 +154,7 @@ within/point-within-polygons
 within/points-within-polygon
 within/points-within-polygons
 
-# === interpolate-hcl / interpolate-lab: remaining fixtures need the typed
-# ColorArray value (conversions themselves are implemented).  (2 fixtures) ===
+# === interpolate-hcl / interpolate-lab: remaining need the typed ColorArray value.  (2 fixtures) ===
 interpolate-hcl/linear-color-array
 interpolate-lab/linear-color-array
 
@@ -173,8 +162,8 @@ interpolate-lab/linear-color-array
 constant-folding/evaluation-error
 get/from-literal--missing
 
-# === Special typed values (Formatted, ResolvedImage, Padding, ColorArray,
-# ProjectionDefinition) that eval does not yet construct.  (9 fixtures) ===
+# === Special typed values (Formatted, Padding, ColorArray, ProjectionDefinition)
+# eval does not yet construct.  (9 fixtures) ===
 array/default-value
 coalesce/error
 coalesce/inference

@@ -15,6 +15,11 @@ pub enum Value {
     Color(Color),
     Array(Vec<Value>),
     Object(BTreeMap<String, Value>),
+    /// A resolved image reference (the `image` operator).
+    Image {
+        name: String,
+        available: bool,
+    },
 }
 
 impl Value {
@@ -28,6 +33,7 @@ impl Value {
             Value::Color(_) => "color",
             Value::Array(_) => "array",
             Value::Object(_) => "object",
+            Value::Image { .. } => "resolvedImage",
         }
     }
 
@@ -94,6 +100,7 @@ impl fmt::Display for Value {
                 write!(f, "{}", parts.join(","))
             }
             Value::Object(_) => write!(f, "{self:?}"),
+            Value::Image { name, .. } => write!(f, "{name}"),
         }
     }
 }
