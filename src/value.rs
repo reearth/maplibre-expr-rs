@@ -30,6 +30,12 @@ pub enum Value {
     Padding([f64; 4]),
     /// A `projectionDefinition`: a named projection or a transition between two.
     Projection(Projection),
+    /// A locale-aware string collator (the `collator` operator).
+    Collator {
+        case_sensitive: bool,
+        diacritic_sensitive: bool,
+        locale: Option<String>,
+    },
 }
 
 /// A projection definition value.
@@ -72,6 +78,7 @@ impl Value {
             Value::ColorArray(_) => "colorArray",
             Value::Padding(_) => "padding",
             Value::Projection(_) => "projectionDefinition",
+            Value::Collator { .. } => "collator",
         }
     }
 
@@ -159,6 +166,7 @@ impl fmt::Display for Value {
             }
             Value::Projection(Projection::Named(s)) => write!(f, "{s}"),
             Value::Projection(_) => write!(f, "{self:?}"),
+            Value::Collator { .. } => write!(f, "collator"),
         }
     }
 }

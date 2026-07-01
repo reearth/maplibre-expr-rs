@@ -73,6 +73,7 @@ impl Type {
             Value::ColorArray(_) => Type::ColorArray,
             Value::Padding(_) => Type::Padding,
             Value::Projection(_) => Type::ProjectionDefinition,
+            Value::Collator { .. } => Type::Collator,
             Value::Array(items) => {
                 let mut item_type: Option<Type> = None;
                 for it in items {

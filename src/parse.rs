@@ -51,6 +51,7 @@ fn parse_array(items: &[Json]) -> Result<Expr> {
         "interpolate-hcl" => parse_interpolate(InterpSpace::Hcl, args),
         "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args),
         "format" => parse_format(args),
+        "collator" => parse_collator(args),
         "number-format" => parse_number_format(args),
         "within" => parse_within(args),
         "distance" => parse_distance(args),
@@ -124,7 +125,6 @@ fn arity(op: &str) -> Option<(usize, Option<usize>)> {
         | "e"
         | "pi"
         | "ln2"
-        | "resolved-locale"
         | "raster-value"
         | "sky-radial-progress"
         | "measure-light"
@@ -157,7 +157,7 @@ fn arity(op: &str) -> Option<(usize, Option<usize>)> {
         "join" => (2, Some(2)),
         "split" => (2, Some(2)),
         "is-supported-script" => (1, Some(1)),
-        "collator" => (1, Some(1)),
+        "resolved-locale" => (1, Some(1)),
         "number-format" => (2, Some(2)),
         "format" | "image" => (1, None),
 
@@ -289,6 +289,26 @@ fn parse_interpolate(space: InterpSpace, args: &[Json]) -> Result<Expr> {
 
 /// Parse `["within", geojson]`, extracting polygon rings (as `[lng, lat]`)
 /// from a Polygon, MultiPolygon, Feature, or FeatureCollection.
+fn parse_collator(args: &[Json]) -> Result<Expr> {
+    if args.len() != 1 {
+        return Err(ParseError::new("Expected one argument to 'collator'."));
+    }
+    let opts = args[0]
+        .as_object()
+        .ok_or_else(|| ParseError::new("'collator' argument must be an options object."))?;
+    let opt = |key: &str| -> Result<Option<Box<Expr>>> {
+        match opts.get(key) {
+            Some(v) => Ok(Some(Box::new(parse(v)?))),
+            None => Ok(None),
+        }
+    };
+    Ok(Expr::Collator {
+        case_sensitive: opt("case-sensitive")?,
+        diacritic_sensitive: opt("diacritic-sensitive")?,
+        locale: opt("locale")?,
+    })
+}
+
 fn parse_number_format(args: &[Json]) -> Result<Expr> {
     if args.len() != 2 {
         return Err(ParseError::new(

@@ -89,6 +89,27 @@ impl Checker {
             Expr::Format(sections) => self.infer_format(sections),
             Expr::Within(polygons) => Ok((Expr::Within(polygons.clone()), Type::Boolean)),
             Expr::Distance(geoms) => Ok((Expr::Distance(geoms.clone()), Type::Number)),
+            Expr::Collator {
+                case_sensitive,
+                diacritic_sensitive,
+                locale,
+            } => {
+                let mut opt =
+                    |e: &Option<Box<Expr>>, ty: Type| -> Result<Option<Box<Expr>>, ParseError> {
+                        match e {
+                            Some(e) => Ok(Some(Box::new(self.infer(e, Some(&ty))?.0))),
+                            None => Ok(None),
+                        }
+                    };
+                Ok((
+                    Expr::Collator {
+                        case_sensitive: opt(case_sensitive, Type::Boolean)?,
+                        diacritic_sensitive: opt(diacritic_sensitive, Type::Boolean)?,
+                        locale: opt(locale, Type::String)?,
+                    },
+                    Type::Collator,
+                ))
+            }
             Expr::NumberFormat {
                 value,
                 locale,
@@ -463,7 +484,15 @@ impl Checker {
         }
         let mut new_args = vec![lhs, rhs];
         if let Some(third) = args.get(2) {
-            new_args.push(self.infer(third, None)?.0);
+            // A collator can only compare strings, so at least one operand must
+            // be string- or value-typed.
+            let stringy = |t: &Type| matches!(t, Type::String | Type::Value);
+            if !stringy(&lt) && !stringy(&rt) {
+                return Err(ParseError::new(
+                    "Cannot use collator to compare non-string types.",
+                ));
+            }
+            new_args.push(self.infer(third, Some(&Type::Collator))?.0);
         }
         Ok((
             Expr::Call {
@@ -870,6 +899,18 @@ fn children(expr: &Expr) -> Vec<&Expr> {
                         .flatten(),
                 );
             }
+        }
+        Expr::Collator {
+            case_sensitive,
+            diacritic_sensitive,
+            locale,
+        } => {
+            out.extend(
+                [case_sensitive, diacritic_sensitive, locale]
+                    .into_iter()
+                    .flatten()
+                    .map(|b| b.as_ref()),
+            );
         }
         Expr::NumberFormat {
             value,

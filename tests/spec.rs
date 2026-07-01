@@ -732,6 +732,8 @@ fn value_to_json(value: &Value) -> Json {
                 transition,
             } => serde_json::json!({ "from": from, "to": to, "transition": transition }),
         },
+        // A collator is never a direct output value.
+        Value::Collator { .. } => Json::Null,
         Value::Formatted(sections) => {
             let secs: Vec<Json> = sections
                 .iter()

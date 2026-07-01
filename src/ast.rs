@@ -50,6 +50,12 @@ pub enum Expr {
     Within(Vec<Vec<Vec<(f64, f64)>>>),
     /// `["distance", geojson]` — the argument geometries in `[lng, lat]`.
     Distance(Vec<crate::distance::SimpleGeom>),
+    /// `["collator", options]` — a locale-aware string collator.
+    Collator {
+        case_sensitive: Option<Box<Expr>>,
+        diacritic_sensitive: Option<Box<Expr>>,
+        locale: Option<Box<Expr>>,
+    },
     /// `["number-format", value, options]`.
     NumberFormat {
         value: Box<Expr>,

@@ -78,6 +78,23 @@ impl Evaluator<'_> {
                 };
                 Ok(Value::Number(d))
             }
+            Expr::Collator {
+                case_sensitive,
+                diacritic_sensitive,
+                locale,
+            } => {
+                let flag = |e: &Option<Box<Expr>>, this: &mut Self| -> Result<bool> {
+                    match e {
+                        Some(e) => Ok(this.eval(e)?.is_truthy()),
+                        None => Ok(false),
+                    }
+                };
+                Ok(Value::Collator {
+                    case_sensitive: flag(case_sensitive, self)?,
+                    diacritic_sensitive: flag(diacritic_sensitive, self)?,
+                    locale: self.eval_opt_string(locale)?,
+                })
+            }
             Expr::NumberFormat {
                 value,
                 currency,
@@ -322,6 +339,10 @@ impl Evaluator<'_> {
                 let available = self.ctx.available_images.iter().any(|n| n == &name);
                 Ok(Value::Image { name, available })
             }
+            "resolved-locale" => match self.eval(&args[0])? {
+                Value::Collator { locale, .. } => Ok(Value::String(locale.unwrap_or_default())),
+                other => Err(type_error("collator", &other)),
+            },
             "heatmap-density" => Ok(Value::Number(self.ctx.heatmap_density.unwrap_or(0.0))),
             "elevation" => Ok(Value::Number(self.ctx.elevation.unwrap_or(0.0))),
             "line-progress" => Ok(Value::Number(self.ctx.line_progress.unwrap_or(0.0))),
@@ -595,12 +616,23 @@ impl Evaluator<'_> {
     fn op_eq(&mut self, args: &[Expr], want_equal: bool) -> Result<Value> {
         let a = self.eval(&args[0])?;
         let b = self.eval(&args[1])?;
-        Ok(Value::Bool(values_equal(&a, &b) == want_equal))
+        // A collator applies only when both operands are strings at runtime;
+        // otherwise equality is by value (so 1 == "1" is false).
+        let equal = match self.eval_collator(args)? {
+            Some(c) if matches!(a, Value::String(_)) && matches!(b, Value::String(_)) => {
+                collator_compare(&c, &a, &b) == Some(std::cmp::Ordering::Equal)
+            }
+            _ => values_equal(&a, &b),
+        };
+        Ok(Value::Bool(equal == want_equal))
     }
 
     fn op_cmp(&mut self, args: &[Expr], ord: Ordering) -> Result<Value> {
         let a = self.eval(&args[0])?;
         let b = self.eval(&args[1])?;
+        if let Some(c) = self.eval_collator(args)? {
+            return Ok(Value::Bool(ord.test(collator_compare(&c, &a, &b))));
+        }
         let result = match (&a, &b) {
             (Value::Number(x), Value::Number(y)) => ord.test(x.partial_cmp(y)),
             (Value::String(x), Value::String(y)) => ord.test(Some(x.cmp(y))),
@@ -613,6 +645,14 @@ impl Evaluator<'_> {
             }
         };
         Ok(Value::Bool(result))
+    }
+
+    /// Evaluate the optional third (collator) argument of a comparison.
+    fn eval_collator(&mut self, args: &[Expr]) -> Result<Option<Value>> {
+        match args.get(2) {
+            Some(e) => Ok(Some(self.eval(e)?)),
+            None => Ok(None),
+        }
     }
 
     // ---- arithmetic helpers ------------------------------------------
@@ -883,6 +923,7 @@ fn type_string(v: &Value) -> String {
         Value::ColorArray(_) => "colorArray".to_string(),
         Value::Padding(_) => "padding".to_string(),
         Value::Projection(_) => "projectionDefinition".to_string(),
+        Value::Collator { .. } => "collator".to_string(),
         Value::Color(_) => "color".to_string(),
         Value::Object(_) => "object".to_string(),
         Value::Array(items) => {
@@ -1165,9 +1206,11 @@ fn to_string_value(v: &Value) -> String {
         Value::Color(c) => c.to_string(),
         Value::Image { name, .. } => name.clone(),
         Value::Formatted(sections) => sections.iter().map(|s| s.text.clone()).collect(),
-        Value::NumberArray(_) | Value::ColorArray(_) | Value::Padding(_) | Value::Projection(_) => {
-            v.to_string()
-        }
+        Value::NumberArray(_)
+        | Value::ColorArray(_)
+        | Value::Padding(_)
+        | Value::Projection(_)
+        | Value::Collator { .. } => v.to_string(),
         Value::Array(_) | Value::Object(_) => json_string(v),
     }
 }
@@ -1210,7 +1253,9 @@ fn json_string(v: &Value) -> String {
                 .collect();
             format!("{{\"values\":[{}]}}", parts.join(","))
         }
-        Value::ColorArray(_) | Value::Projection(_) => format!("{:?}", v.to_string()),
+        Value::ColorArray(_) | Value::Projection(_) | Value::Collator { .. } => {
+            format!("{:?}", v.to_string())
+        }
     }
 }
 
@@ -1501,10 +1546,58 @@ fn group_thousands(int: &str) -> String {
     let mut out = String::new();
     let n = bytes.len();
     for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (n - i) % 3 == 0 {
+        if i > 0 && (n - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*b as char);
     }
     out
+}
+
+// ---- collator comparison ----------------------------------------------
+
+/// Compare two values with a collator, mirroring `Intl.Collator.compare` for
+/// the sensitivities the spec exercises. Uses a three-level key: base letters
+/// (primary), diacritics (secondary, when diacritic-sensitive), and case
+/// (tertiary, when case-sensitive).
+fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    let (case_sensitive, diacritic_sensitive) = match collator {
+        Value::Collator {
+            case_sensitive,
+            diacritic_sensitive,
+            ..
+        } => (*case_sensitive, *diacritic_sensitive),
+        _ => return None,
+    };
+    let sa = to_string_value(a);
+    let sb = to_string_value(b);
+    let (pa, da, ca) = collation_key(&sa);
+    let (pb, db, cb) = collation_key(&sb);
+    use std::cmp::Ordering::Equal;
+    let mut ord = pa.cmp(&pb);
+    if ord == Equal && diacritic_sensitive {
+        ord = da.cmp(&db);
+    }
+    if ord == Equal && case_sensitive {
+        ord = ca.cmp(&cb);
+    }
+    Some(ord)
+}
+
+/// Build (primary, secondary, tertiary) collation keys for a string.
+fn collation_key(s: &str) -> (String, String, String) {
+    use unicode_normalization::UnicodeNormalization;
+    let mut primary = String::new();
+    let mut secondary = String::new();
+    let mut tertiary = String::new();
+    for c in s.nfd() {
+        if ('\u{300}'..='\u{36f}').contains(&c) {
+            secondary.push(c); // a combining diacritic
+        } else {
+            primary.extend(c.to_lowercase());
+            // Lowercase sorts before uppercase at the case level.
+            tertiary.push(if c.is_uppercase() { '1' } else { '0' });
+        }
+    }
+    (primary, secondary, tertiary)
 }

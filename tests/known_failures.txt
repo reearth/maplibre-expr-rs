@@ -1,22 +1,8 @@
-# Not-yet-passing fixtures: collator (locale-aware comparison) + a few edge cases.
+# Not-yet-passing: locale-specific collation (de/sv/dk/fr tailoring) and
+# compile-time constant folding of literal sub-expressions.
 collator/accent-equals-de                                
-collator/accent-lt-en                                    
-collator/accent-not-equals-en                            
-collator/base-default-locale                             
-collator/base-equals-en                                  
-collator/base-gt-en                                      
-collator/case-lteq-en                                    
-collator/case-not-equals-en                              
-collator/case-omitted-en                                 
-collator/diacritic-omitted-en                            
-collator/variable-equals                                 
 collator/variable-gt                                     
 collator/variable-lteq                                   
-collator/variable-not-equals                             
-collator/variant-equals-en                               
-collator/variant-gteq-en                                 
 constant-folding/evaluation-error                        
-equal/collator-value                                     
 get/from-literal--missing                                
-resolved-locale/basic                                    
-test result: FAILED. 543 passed; 20 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: FAILED. 558 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
