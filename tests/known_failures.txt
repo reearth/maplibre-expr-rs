@@ -1,31 +1,26 @@
-# Fixtures not yet passing, reported as `ignored` by the spec harness.
-# Remaining: locale builtins (collator/number-format/resolved-locale) and a
-# few coalesce/enum/constant-folding edge cases.
-coalesce/error
-coalesce/inference
-collator/accent-equals-de
-collator/accent-lt-en
-collator/accent-not-equals-en
-collator/base-default-locale
-collator/base-equals-en
-collator/base-gt-en
-collator/case-lteq-en
-collator/case-not-equals-en
-collator/case-omitted-en
-collator/diacritic-omitted-en
-collator/variable-equals
-collator/variable-gt
-collator/variable-lteq
-collator/variable-not-equals
-collator/variant-equals-en
-collator/variant-gteq-en
-constant-folding/evaluation-error
-equal/collator-value
-format/implicit-omit
-get/from-literal--missing
-legacy/identity/enum
-number-format/currency
-number-format/default
-number-format/precision
-number-format/unit
-resolved-locale/basic
+# Not-yet-passing fixtures (locale builtins + a couple of edge cases).
+collator/accent-equals-de                                
+collator/accent-lt-en                                    
+collator/accent-not-equals-en                            
+collator/base-default-locale                             
+collator/base-equals-en                                  
+collator/base-gt-en                                      
+collator/case-lteq-en                                    
+collator/case-not-equals-en                              
+collator/case-omitted-en                                 
+collator/diacritic-omitted-en                            
+collator/variable-equals                                 
+collator/variable-gt                                     
+collator/variable-lteq                                   
+collator/variable-not-equals                             
+collator/variant-equals-en                               
+collator/variant-gteq-en                                 
+constant-folding/evaluation-error                        
+equal/collator-value                                     
+get/from-literal--missing                                
+number-format/currency                                   
+number-format/default                                    
+number-format/precision                                  
+number-format/unit                                       
+resolved-locale/basic                                    
+test result: FAILED. 539 passed; 24 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s

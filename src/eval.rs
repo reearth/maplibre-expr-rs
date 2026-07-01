@@ -545,18 +545,30 @@ impl Evaluator<'_> {
     }
 
     fn op_coalesce(&mut self, args: &[Expr]) -> Result<Value> {
-        for a in args {
-            match self.eval(a) {
-                Ok(Value::Null) => continue,
-                // An unavailable image is skipped, like a null.
-                Ok(Value::Image {
-                    available: false, ..
-                }) => continue,
-                Ok(v) => return Ok(v),
-                Err(_) => continue,
+        // Errors propagate; only null results (and unavailable images) are
+        // skipped. If the final argument is an unavailable image, its name is
+        // returned.
+        let mut requested: Option<String> = None;
+        let mut result = Value::Null;
+        for (i, a) in args.iter().enumerate() {
+            result = self.eval(a)?;
+            if let Value::Image {
+                name,
+                available: false,
+            } = &result
+            {
+                requested.get_or_insert_with(|| name.clone());
+                result = if i + 1 == args.len() {
+                    Value::String(requested.clone().unwrap())
+                } else {
+                    Value::Null
+                };
+            }
+            if !matches!(result, Value::Null) {
+                break;
             }
         }
-        Ok(Value::Null)
+        Ok(result)
     }
 
     fn op_eq(&mut self, args: &[Expr], want_equal: bool) -> Result<Value> {

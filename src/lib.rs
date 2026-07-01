@@ -57,8 +57,16 @@ pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
 /// coercions take effect). Returns a [`ParseError`] for expressions the
 /// reference implementation rejects at compile time (bad comparisons, malformed
 /// `match` branches, non-interpolatable outputs, misused `zoom`, and so on).
-pub fn typecheck(expr: &Expr, expected: Option<&Type>) -> Result<Expr, ParseError> {
-    typecheck::typecheck(expr, expected)
+///
+/// `coerce_top_string` reflects whether the target property is string-typed
+/// (not merely enum-typed): such properties coerce the top-level result to a
+/// string rather than asserting it.
+pub fn typecheck(
+    expr: &Expr,
+    expected: Option<&Type>,
+    coerce_top_string: bool,
+) -> Result<Expr, ParseError> {
+    typecheck::typecheck(expr, expected, coerce_top_string)
 }
 
 /// Evaluate a parsed expression against an evaluation context.

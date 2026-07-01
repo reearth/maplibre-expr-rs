@@ -23,12 +23,15 @@ const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 /// Type-check `expr` against an optional `expected` type. Returns the annotated
 /// expression (with coercion/assertion nodes inserted) on success, or a
 /// [`ParseError`] describing the first problem.
-pub fn typecheck(expr: &Expr, expected: Option<&Type>) -> Result<Expr, ParseError> {
+pub fn typecheck(
+    expr: &Expr,
+    expected: Option<&Type>,
+    coerce_top_string: bool,
+) -> Result<Expr, ParseError> {
     let mut checker = Checker { scope: Vec::new() };
     let (node, ty) = checker.infer_node(expr, expected)?;
-    // Top level: string-valued properties coerce rather than assert.
-    let coerce_string = matches!(expected, Some(Type::String));
-    let (annotated, _) = reconcile(node, ty, expected, coerce_string)?;
+    // Top level: string-valued (not enum) properties coerce rather than assert.
+    let (annotated, _) = reconcile(node, ty, expected, coerce_top_string)?;
     check_zoom_usage(&annotated)?;
     Ok(annotated)
 }
@@ -500,20 +503,64 @@ impl Checker {
     }
 
     fn infer_coalesce(&mut self, op: &str, args: &[Expr], expected: Option<&Type>) -> R {
-        let mut output_type = concrete(expected);
+        // Arguments are checked with the output type but their annotations are
+        // omitted (they stay raw); the coalesce result is annotated only if some
+        // argument doesn't already satisfy the expected type.
+        let concrete_exp = concrete(expected);
+        let mut output_type = concrete_exp.clone();
         let mut new_args = Vec::with_capacity(args.len());
+        let mut arg_types = Vec::with_capacity(args.len());
         for a in args {
-            let (node, t) = self.infer(a, output_type.as_ref())?;
-            output_type.get_or_insert(t);
+            let (node, t) = self.infer_omit(a, output_type.as_ref())?;
+            output_type.get_or_insert(t.clone());
             new_args.push(node);
+            arg_types.push(t);
         }
+        let node_type = match &concrete_exp {
+            Some(exp) if arg_types.iter().any(|t| !is_subtype(exp, t)) => Type::Value,
+            Some(exp) => exp.clone(),
+            None => output_type.unwrap_or(Type::Value),
+        };
         Ok((
             Expr::Call {
                 op: op.to_string(),
                 args: new_args,
             },
-            output_type.unwrap_or(Type::Value),
+            node_type,
         ))
+    }
+
+    /// Infer with the argument-annotation omitted: assert/coerce mismatches are
+    /// tolerated (the value stays raw), but a plain subtype violation errors.
+    fn infer_omit(&mut self, expr: &Expr, expected: Option<&Type>) -> R {
+        let (node, actual) = self.infer_node(expr, expected)?;
+        let Some(exp) = expected else {
+            return Ok((node, actual));
+        };
+        let assertable = matches!(
+            exp,
+            Type::String | Type::Number | Type::Boolean | Type::Object | Type::Array(..)
+        );
+        let coercible = matches!(
+            exp,
+            Type::Color
+                | Type::Formatted
+                | Type::ResolvedImage
+                | Type::Padding
+                | Type::NumberArray
+                | Type::ColorArray
+                | Type::ProjectionDefinition
+                | Type::VariableAnchorOffsetCollection
+        );
+        if (assertable || coercible) && matches!(actual, Type::Value) {
+            return Ok((node, actual));
+        }
+        if !is_subtype(exp, &actual) {
+            return Err(ParseError::new(format!(
+                "Expected {exp} but found {actual} instead."
+            )));
+        }
+        Ok((node, actual))
     }
 
     fn infer_case(&mut self, op: &str, args: &[Expr], expected: Option<&Type>) -> R {

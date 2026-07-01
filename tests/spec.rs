@@ -479,7 +479,13 @@ fn run_fixture(path: &Path) -> Result<(), Failed> {
     // type comes from the property spec, when present. Type checking returns the
     // annotated tree (with coercion/assertion nodes) that we then evaluate.
     let expected_type = doc.get("propertySpec").and_then(property_spec_type);
-    let compiled = parse(expression).and_then(|expr| typecheck(&expr, expected_type.as_ref()));
+    let coerce_top_string = doc
+        .get("propertySpec")
+        .and_then(|s| s.get("type"))
+        .and_then(Json::as_str)
+        == Some("string");
+    let compiled = parse(expression)
+        .and_then(|expr| typecheck(&expr, expected_type.as_ref(), coerce_top_string));
 
     if compiled_result == "error" {
         return match compiled {
