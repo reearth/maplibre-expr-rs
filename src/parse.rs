@@ -40,10 +40,12 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
         )
     })?;
     let op = first.as_str().ok_or_else(|| {
+        // Reported at the operator slot, position [0].
         ParseError::new(format!(
             "Expression name must be a string, but found {} instead. If you wanted a literal array, use [\"literal\", [...]].",
             js_typeof(first)
         ))
+        .at(0)
     })?;
     let args = &items[1..];
 
@@ -220,8 +222,10 @@ fn check_generic_arity(op: &str, argc: usize) -> Result<()> {
         return Ok(());
     }
 
-    let range = arity(op)
-        .ok_or_else(|| ParseError::of(ParseErrorKind::UnknownExpression(op.to_string())))?;
+    let range = arity(op).ok_or_else(|| {
+        // The unknown operator name sits at position [0].
+        ParseError::of(ParseErrorKind::UnknownExpression(op.to_string())).at(0)
+    })?;
     let (min, max) = range;
     if argc < min || max.is_some_and(|m| argc > m) {
         // `to-boolean` / `to-string` are single-argument coercions with their
@@ -350,16 +354,17 @@ fn parse_match(args: &[Json], opts: &Options) -> Result<Expr> {
             "Expected an even number of arguments (>= 4) to 'match'.",
         ));
     }
-    let input = parse(&args[0], opts)?;
+    // Positions: op[0], input[1], label0[2], out0[3], ..., default[len].
+    let input = parse(&args[0], opts).map_err(|e| e.at(1))?;
     let mut arms = Vec::new();
     let mut i = 1;
     while i + 1 < args.len() {
-        let labels = parse_match_labels(&args[i])?;
-        let output = parse(&args[i + 1], opts)?;
+        let labels = parse_match_labels(&args[i]).map_err(|e| e.at(i + 1))?;
+        let output = parse(&args[i + 1], opts).map_err(|e| e.at(i + 2))?;
         arms.push((labels, output));
         i += 2;
     }
-    let default = parse(&args[args.len() - 1], opts)?;
+    let default = parse(&args[args.len() - 1], opts).map_err(|e| e.at(args.len()))?;
     Ok(Expr::Match {
         input: Box::new(input),
         arms,
@@ -382,15 +387,16 @@ fn parse_step(args: &[Json], opts: &Options) -> Result<Expr> {
             "Expected an even number of arguments (>= 4) to 'step'.",
         ));
     }
-    let input = parse(&args[0], opts)?;
-    let output0 = parse(&args[1], opts)?;
+    // Positions: op[0], input[1], output0[2], stop[3], output[4], ...
+    let input = parse(&args[0], opts).map_err(|e| e.at(1))?;
+    let output0 = parse(&args[1], opts).map_err(|e| e.at(2))?;
     let mut stops = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
         let stop = args[i]
             .as_f64()
             .ok_or_else(|| ParseError::new("Step stop inputs must be numbers."))?;
-        stops.push((stop, parse(&args[i + 1], opts)?));
+        stops.push((stop, parse(&args[i + 1], opts).map_err(|e| e.at(i + 2))?));
         i += 2;
     }
     check_ascending("step", &stops)?;
@@ -407,15 +413,16 @@ fn parse_interpolate(space: InterpSpace, args: &[Json], opts: &Options) -> Resul
             "Expected an even number of arguments (>= 4) to 'interpolate'.",
         ));
     }
-    let kind = parse_interp_kind(&args[0])?;
-    let input = parse(&args[1], opts)?;
+    // Positions: op[0], kind[1], input[2], stop[3], output[4], ...
+    let kind = parse_interp_kind(&args[0]).map_err(|e| e.at(1))?;
+    let input = parse(&args[1], opts).map_err(|e| e.at(2))?;
     let mut stops = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
         let stop = args[i]
             .as_f64()
             .ok_or_else(|| ParseError::new("Interpolation stop inputs must be numbers."))?;
-        stops.push((stop, parse(&args[i + 1], opts)?));
+        stops.push((stop, parse(&args[i + 1], opts).map_err(|e| e.at(i + 2))?));
         i += 2;
     }
     check_ascending("interpolate", &stops)?;
@@ -718,12 +725,14 @@ fn parse_interp_kind(json: &Json) -> Result<InterpKind> {
     match name {
         "linear" => Ok(InterpKind::Linear),
         "exponential" => {
+            // The base is at index [1] within the interpolation-type array.
             let base = items.get(1).and_then(Json::as_f64).ok_or_else(|| {
-                ParseError::new("Exponential interpolation requires a numeric base.")
+                ParseError::new("Exponential interpolation requires a numeric base.").at(1)
             })?;
             Ok(InterpKind::Exponential(base))
         }
         "cubic-bezier" => {
+            // Reported at the interpolation-type slot itself (no sub-index).
             let cubic_err = || {
                 ParseError::new(
                     "Cubic bezier interpolation requires four numeric arguments with values between 0 and 1.",
@@ -759,9 +768,11 @@ fn validate_array_type_args(args: &[Json]) -> Result<()> {
     match args[0].as_str() {
         Some("string" | "number" | "boolean") => {}
         _ => {
+            // The item type is the first argument, at position [1].
             return Err(ParseError::new(
                 "The item type argument of \"array\" must be one of string, number, boolean",
-            ))
+            )
+            .at(1));
         }
     }
     if args.len() >= 3 {
@@ -770,9 +781,11 @@ fn validate_array_type_args(args: &[Json]) -> Result<()> {
             match args[1].as_f64() {
                 Some(n) if n >= 0.0 && n.fract() == 0.0 => {}
                 _ => {
+                    // The length is the second argument, at position [2].
                     return Err(ParseError::new(
                         "The length argument to \"array\" must be a positive integer literal",
-                    ))
+                    )
+                    .at(2));
                 }
             }
         }
@@ -781,11 +794,14 @@ fn validate_array_type_args(args: &[Json]) -> Result<()> {
 }
 
 fn check_ascending(kind: &str, stops: &[(f64, Expr)]) -> Result<()> {
-    for pair in stops.windows(2) {
+    for (j, pair) in stops.windows(2).enumerate() {
         if pair[1].0 <= pair[0].0 {
+            // The offending stop is `stops[j + 1]`, whose input is at
+            // position [3 + 2*(j+1)] in the original array.
             return Err(ParseError::new(format!(
                 "Input/output pairs for \"{kind}\" expressions must be arranged with input values in strictly ascending order."
-            )));
+            ))
+            .at(3 + 2 * (j + 1)));
         }
     }
     Ok(())

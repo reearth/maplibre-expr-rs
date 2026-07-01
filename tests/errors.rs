@@ -25,10 +25,11 @@ fn wrong_arg_count_kind() {
 
 #[test]
 fn nested_error_carries_location_key() {
-    // The offending sub-expression is the 3rd element (index 2) of `get`.
+    // The offending sub-expression is the 3rd element (index 2) of `get`, and
+    // the unknown operator name sits at position 0 within it — as MapLibre keys.
     let e = compile_err(json!(["get", "x", ["bogus"]]), None);
     assert!(matches!(e.kind, ParseErrorKind::UnknownExpression(_)));
-    assert_eq!(e.key, "[2]");
+    assert_eq!(e.key, "[2][0]");
 }
 
 #[test]

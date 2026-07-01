@@ -119,7 +119,10 @@ impl Checker {
                     .rev()
                     .find(|(n, _)| n == name)
                     .map(|(_, t)| t.clone())
-                    .ok_or_else(|| ParseError::of(ParseErrorKind::UnboundVariable(name.clone())))?;
+                    .ok_or_else(|| {
+                        // The variable name sits at position [1] of `["var", name]`.
+                        ParseError::of(ParseErrorKind::UnboundVariable(name.clone())).at(1)
+                    })?;
                 Ok((Expr::Var(name.clone()), ty))
             }
             Expr::Let { bindings, body } => self.infer_let(bindings, body, expected),
@@ -206,7 +209,16 @@ impl Checker {
 
     /// Infer each argument with no expectation, returning annotated copies.
     fn infer_args(&mut self, args: &[Expr]) -> Result<Vec<Expr>, ParseError> {
-        args.iter().map(|a| Ok(self.infer(a, None)?.0)).collect()
+        // Each argument sits at position [i+1] (the operator is [0]).
+        args.iter()
+            .enumerate()
+            .map(|(i, a)| Ok(self.infer(a, None).map_err(|e| e.at(i + 1))?.0))
+            .collect()
+    }
+
+    /// Infer a child at a known argument position, tagging any error with it.
+    fn infer_at(&mut self, expr: &Expr, expected: Option<&Type>, index: usize) -> R {
+        self.infer(expr, expected).map_err(|e| e.at(index))
     }
 
     fn infer_let(
@@ -217,14 +229,16 @@ impl Checker {
     ) -> R {
         let base = self.scope.len();
         let mut new_bindings = Vec::with_capacity(bindings.len());
-        for (name, value) in bindings {
+        // Positions: op[0], name0[1], val0[2], name1[3], val1[4], ..., body[2n+1].
+        for (k, (name, value)) in bindings.iter().enumerate() {
             if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
                 self.scope.truncate(base);
                 return Err(ParseError::new(
                     "Variable names must contain only alphanumeric characters or '_'.",
-                ));
+                )
+                .at(1 + 2 * k));
             }
-            let (node, t) = match self.infer(value, None) {
+            let (node, t) = match self.infer_at(value, None, 2 + 2 * k) {
                 Ok(v) => v,
                 Err(e) => {
                     self.scope.truncate(base);
@@ -234,7 +248,8 @@ impl Checker {
             new_bindings.push((name.clone(), node));
             self.scope.push((name.clone(), t));
         }
-        let result = self.infer(body, expected);
+        let body_pos = 1 + 2 * bindings.len();
+        let result = self.infer_at(body, expected, body_pos);
         self.scope.truncate(base);
         let (body_node, body_type) = result?;
         Ok((
@@ -255,23 +270,27 @@ impl Checker {
     ) -> R {
         let label_type = validate_match_labels(arms)?;
 
+        // Positions: op[0], input[1], label0[2], out0[3], label1[4], out1[5],
+        // ..., default[2n+2].
         let mut output_type = concrete(expected);
         let mut new_arms = Vec::with_capacity(arms.len());
-        for (labels, output) in arms {
-            let (node, t) = self.infer(output, output_type.as_ref())?;
+        for (k, (labels, output)) in arms.iter().enumerate() {
+            let (node, t) = self.infer_at(output, output_type.as_ref(), 3 + 2 * k)?;
             output_type.get_or_insert(t);
             new_arms.push((labels.clone(), node));
         }
-        let (default_node, dt) = self.infer(default, output_type.as_ref())?;
+        let default_pos = 2 + 2 * arms.len();
+        let (default_node, dt) = self.infer_at(default, output_type.as_ref(), default_pos)?;
         output_type.get_or_insert(dt);
 
-        let (input_node, input_type) = self.infer(input, Some(&Type::Value))?;
+        let (input_node, input_type) = self.infer_at(input, Some(&Type::Value), 1)?;
         if let Some(lt) = &label_type {
             if !matches!(input_type, Type::Value) && !is_subtype(lt, &input_type) {
                 return Err(ParseError::of(ParseErrorKind::TypeMismatch {
                     expected: lt.to_string(),
                     found: input_type.to_string(),
-                }));
+                })
+                .at(1));
             }
         }
         Ok((
@@ -291,18 +310,19 @@ impl Checker {
         stops: &[(f64, Expr)],
         expected: Option<&Type>,
     ) -> R {
-        let (input_node, _) = self.infer(input, Some(&Type::Number))?;
+        // Positions: op[0], input[1], output0[2], stop[3], output[4], ...
+        let (input_node, _) = self.infer_at(input, Some(&Type::Number), 1)?;
         let mut output_type = concrete(expected);
         // Projection outputs stay raw (never coerced to the projection object).
         let projection = matches!(output_type, Some(Type::ProjectionDefinition));
         let child = |t: &Option<Type>| if projection { None } else { t.clone() };
-        let (out0_node, t0) = self.infer(output0, child(&output_type).as_ref())?;
+        let (out0_node, t0) = self.infer_at(output0, child(&output_type).as_ref(), 2)?;
         if !projection {
             output_type.get_or_insert(t0);
         }
         let mut new_stops = Vec::with_capacity(stops.len());
-        for (stop, output) in stops {
-            let (node, t) = self.infer(output, child(&output_type).as_ref())?;
+        for (k, (stop, output)) in stops.iter().enumerate() {
+            let (node, t) = self.infer_at(output, child(&output_type).as_ref(), 4 + 2 * k)?;
             if !projection {
                 output_type.get_or_insert(t);
             }
@@ -326,7 +346,8 @@ impl Checker {
         stops: &[(f64, Expr)],
         expected: Option<&Type>,
     ) -> R {
-        let (input_node, _) = self.infer(input, Some(&Type::Number))?;
+        // Positions: op[0], kind[1], input[2], stop[3], output[4], ...
+        let (input_node, _) = self.infer_at(input, Some(&Type::Number), 2)?;
         // hcl/lab interpolation is color-only, except for a colorArray property.
         let mut output_type = match space {
             InterpSpace::Hcl | InterpSpace::Lab => {
@@ -342,13 +363,13 @@ impl Checker {
         // projection object is produced only by the interpolation itself.
         let projection = matches!(output_type, Some(Type::ProjectionDefinition));
         let mut new_stops = Vec::with_capacity(stops.len());
-        for (stop, output) in stops {
+        for (k, (stop, output)) in stops.iter().enumerate() {
             let child_expected = if projection {
                 None
             } else {
                 output_type.as_ref()
             };
-            let (node, t) = self.infer(output, child_expected)?;
+            let (node, t) = self.infer_at(output, child_expected, 4 + 2 * k)?;
             if !projection {
                 output_type.get_or_insert(t);
             }
@@ -450,15 +471,15 @@ impl Checker {
             | "number-format" => mk(self.infer_args(args)?, Type::String),
 
             "join" => {
-                let (a0, _) = self.infer(&args[0], Some(&Type::array(Type::String, None)))?;
-                let (a1, _) = self.infer(&args[1], None)?;
+                let (a0, _) = self.infer_at(&args[0], Some(&Type::array(Type::String, None)), 1)?;
+                let (a1, _) = self.infer_at(&args[1], None, 2)?;
                 mk(vec![a0, a1], Type::String)
             }
             "split" => mk(self.infer_args(args)?, Type::array(Type::String, None)),
 
             "at" => {
-                let (idx, _) = self.infer(&args[0], None)?;
-                let (arr, arr_ty) = self.infer(&args[1], None)?;
+                let (idx, _) = self.infer_at(&args[0], None, 1)?;
+                let (arr, arr_ty) = self.infer_at(&args[1], None, 2)?;
                 let item = match arr_ty {
                     Type::Array(item, _) => *item,
                     _ => Type::Value,
@@ -515,7 +536,7 @@ impl Checker {
             "case" => return self.infer_case(op, args, expected),
 
             "image" => {
-                let (a0, _) = self.infer(&args[0], Some(&Type::String))?;
+                let (a0, _) = self.infer_at(&args[0], Some(&Type::String), 1)?;
                 mk(vec![a0], Type::ResolvedImage)
             }
 
@@ -524,14 +545,16 @@ impl Checker {
     }
 
     fn infer_comparison(&mut self, op: &str, args: &[Expr]) -> R {
-        let (lhs, lt) = self.infer(&args[0], None)?;
-        let (rhs, rt) = self.infer(&args[1], None)?;
-        for t in [&lt, &rt] {
+        let (lhs, lt) = self.infer_at(&args[0], None, 1)?;
+        let (rhs, rt) = self.infer_at(&args[1], None, 2)?;
+        // The offending operand's position ([1] for lhs, [2] for rhs).
+        for (i, t) in [&lt, &rt].iter().enumerate() {
             if !is_comparable(op, t) {
                 return Err(ParseError::of(ParseErrorKind::NotComparable {
                     op: op.to_string(),
                     ty: t.to_string(),
-                }));
+                })
+                .at(i + 1));
             }
         }
         if lt.kind() != rt.kind() && !matches!(lt, Type::Value) && !matches!(rt, Type::Value) {
@@ -639,8 +662,10 @@ impl Checker {
         let mut output_type = concrete_exp.clone();
         let mut new_args = Vec::with_capacity(args.len());
         let mut arg_types = Vec::with_capacity(args.len());
-        for a in args {
-            let (node, t) = self.infer_omit(a, output_type.as_ref())?;
+        for (i, a) in args.iter().enumerate() {
+            let (node, t) = self
+                .infer_omit(a, output_type.as_ref())
+                .map_err(|e| e.at(i + 1))?;
             output_type.get_or_insert(t.clone());
             new_args.push(node);
             arg_types.push(t);
@@ -826,9 +851,11 @@ fn concrete(expected: Option<&Type>) -> Option<Type> {
 fn validate_match_labels(arms: &[(Vec<Value>, Expr)]) -> Result<Option<Type>, ParseError> {
     let mut label_type: Option<Type> = None;
     let mut seen: Vec<String> = Vec::new();
-    for (labels, _) in arms {
+    for (k, (labels, _)) in arms.iter().enumerate() {
+        // Arm `k`'s label list sits at position [2 + 2k] in the original array.
+        let pos = 2 + 2 * k;
         if labels.is_empty() {
-            return Err(ParseError::new("Expected at least one branch label."));
+            return Err(ParseError::new("Expected at least one branch label.").at(pos));
         }
         for label in labels {
             let lt = match label {
@@ -836,17 +863,21 @@ fn validate_match_labels(arms: &[(Vec<Value>, Expr)]) -> Result<Option<Type>, Pa
                     if n.abs() > MAX_SAFE_INTEGER {
                         return Err(ParseError::new(
                             "Branch labels must be integers no larger than 9007199254740991.",
-                        ));
+                        )
+                        .at(pos));
                     }
                     if n.fract() != 0.0 {
                         return Err(ParseError::new(
                             "Numeric branch labels must be integer values.",
-                        ));
+                        )
+                        .at(pos));
                     }
                     Type::Number
                 }
                 Value::String(_) => Type::String,
-                _ => return Err(ParseError::new("Branch labels must be numbers or strings.")),
+                _ => {
+                    return Err(ParseError::new("Branch labels must be numbers or strings.").at(pos))
+                }
             };
             match &label_type {
                 None => label_type = Some(lt),
@@ -855,12 +886,13 @@ fn validate_match_labels(arms: &[(Vec<Value>, Expr)]) -> Result<Option<Type>, Pa
                     return Err(ParseError::of(ParseErrorKind::TypeMismatch {
                         expected: existing.to_string(),
                         found: lt.to_string(),
-                    }))
+                    })
+                    .at(pos))
                 }
             }
             let key = format!("{label:?}");
             if seen.contains(&key) {
-                return Err(ParseError::new("Branch labels must be unique."));
+                return Err(ParseError::new("Branch labels must be unique.").at(pos));
             }
             seen.push(key);
         }
