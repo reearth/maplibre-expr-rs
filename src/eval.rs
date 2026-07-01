@@ -4,6 +4,7 @@ use crate::ast::{Expr, InterpKind, InterpSpace};
 use crate::color::Color;
 use crate::context::EvaluationContext;
 use crate::error::EvalError;
+use crate::typ::{is_subtype, Type};
 use crate::value::Value;
 
 type Result<T> = std::result::Result<T, EvalError>;
@@ -51,6 +52,14 @@ impl Evaluator<'_> {
                 stops,
             } => self.eval_interpolate(*kind, *space, input, stops),
             Expr::Call { op, args } => self.eval_call(op, args),
+            Expr::Assert(ty, inner) => {
+                let v = self.eval(inner)?;
+                assert_value(ty, v)
+            }
+            Expr::Coerce(ty, inner) => {
+                let v = self.eval(inner)?;
+                coerce_value(ty, v)
+            }
         }
     }
 
@@ -710,6 +719,49 @@ fn type_error(expected: &str, found: &Value) -> EvalError {
         "Expected value to be of type {expected}, but found {} instead.",
         found.type_name()
     ))
+}
+
+/// A type-directed runtime assertion (`Expr::Assert`): the value must already
+/// be of the asserted type, or evaluation errors.
+fn assert_value(ty: &Type, v: Value) -> Result<Value> {
+    if is_subtype(ty, &Type::of_value(&v)) {
+        Ok(v)
+    } else {
+        Err(type_error(&ty.to_string(), &v))
+    }
+}
+
+/// A type-directed runtime coercion (`Expr::Coerce`): convert the value to the
+/// target type, matching MapLibre's `Coercion`.
+fn coerce_value(ty: &Type, v: Value) -> Result<Value> {
+    match ty {
+        Type::String => Ok(Value::String(to_string_value(&v))),
+        Type::Boolean => Ok(Value::Bool(v.is_truthy())),
+        Type::Number => match &v {
+            Value::Number(n) => Ok(Value::Number(*n)),
+            Value::Null => Ok(Value::Number(0.0)),
+            Value::Bool(b) => Ok(Value::Number(if *b { 1.0 } else { 0.0 })),
+            Value::String(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    Ok(Value::Number(0.0))
+                } else {
+                    t.parse::<f64>()
+                        .map(Value::Number)
+                        .map_err(|_| EvalError::new(format!("Could not convert {t} to number.")))
+                }
+            }
+            _ => Err(type_error("number", &v)),
+        },
+        Type::Color => match coerce_color(&v) {
+            Some(c) => Ok(Value::Color(c)),
+            None => Err(EvalError::new(format!(
+                "Could not parse color from value '{v}'"
+            ))),
+        },
+        // Types without a dedicated runtime coercion pass through unchanged.
+        _ => Ok(v),
+    }
 }
 
 /// `in` / `index-of` accept only primitive needles.

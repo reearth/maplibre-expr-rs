@@ -1,5 +1,6 @@
 //! The parsed expression tree.
 
+use crate::typ::Type;
 use crate::value::Value;
 
 /// A parsed MapLibre expression.
@@ -39,6 +40,12 @@ pub enum Expr {
         input: Box<Expr>,
         stops: Vec<(f64, Expr)>,
     },
+    /// A runtime type assertion inserted by type checking: the inner expression
+    /// must already produce the given type at runtime, or evaluation errors.
+    Assert(Type, Box<Expr>),
+    /// A runtime coercion inserted by type checking: the inner expression's
+    /// value is converted to the given type (e.g. string → color).
+    Coerce(Type, Box<Expr>),
 }
 
 /// The interpolation curve used by an `interpolate` expression.

@@ -50,10 +50,12 @@ pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
 }
 
 /// Statically type-check a parsed expression, optionally against the type a
-/// property expects. Returns a [`ParseError`] for expressions the reference
-/// implementation rejects at compile time (bad comparisons, malformed `match`
-/// branches, non-interpolatable outputs, misused `zoom`, and so on).
-pub fn typecheck(expr: &Expr, expected: Option<&Type>) -> Result<(), ParseError> {
+/// property expects. On success returns a rewritten tree with type-directed
+/// coercion/assertion nodes inserted (evaluate this returned expression so the
+/// coercions take effect). Returns a [`ParseError`] for expressions the
+/// reference implementation rejects at compile time (bad comparisons, malformed
+/// `match` branches, non-interpolatable outputs, misused `zoom`, and so on).
+pub fn typecheck(expr: &Expr, expected: Option<&Type>) -> Result<Expr, ParseError> {
     typecheck::typecheck(expr, expected)
 }
 

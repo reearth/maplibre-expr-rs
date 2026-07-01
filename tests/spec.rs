@@ -148,10 +148,10 @@ fn run_fixture(path: &Path) -> Result<(), Failed> {
         .unwrap_or("success");
 
     // A fixture "compiles" if it both parses and type-checks. The expected
-    // type comes from the property spec, when present.
+    // type comes from the property spec, when present. Type checking returns the
+    // annotated tree (with coercion/assertion nodes) that we then evaluate.
     let expected_type = doc.get("propertySpec").and_then(property_spec_type);
-    let compiled =
-        parse(expression).and_then(|expr| typecheck(&expr, expected_type.as_ref()).map(|_| expr));
+    let compiled = parse(expression).and_then(|expr| typecheck(&expr, expected_type.as_ref()));
 
     if compiled_result == "error" {
         return match compiled {

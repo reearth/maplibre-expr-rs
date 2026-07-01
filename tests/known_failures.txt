@@ -1,16 +1,12 @@
-# Fixtures the evaluator does not yet pass, reported as `ignored` by the spec
-# harness instead of failing the build. One fixture name per line (its path
-# under tests/fixtures/expression). Grouped by reason so it doubles as a
-# roadmap. Nothing is skipped silently.
+# Fixtures not yet passing, reported as `ignored` by the spec harness. Grouped
+# by reason so it doubles as a roadmap. Nothing is skipped silently.
 
-# === Legacy stop-function / collator syntax: the fixture's expression is a JSON
-# object (old `{stops: ...}` function form or a collator options object), not
-# an expression array. Supporting the legacy function format is out of scope.  (1 fixtures) ===
+# === Legacy stop-function / collator object syntax (the expression is a JSON
+# object, not an expression array). Out of scope for now.  (1 fixtures) ===
 equal/collator-value
 
 # === Operators not yet implemented (distance/within/collator/format/image/
-# number-format/feature-state/resolved-locale/is-supported-script/geo/locale
-# builtins). Evaluation reports them as unimplemented.  (156 fixtures) ===
+# number-format/feature-state/resolved-locale/is-supported-script/geo/locale).  (156 fixtures) ===
 collator/accent-equals-de
 collator/accent-lt-en
 collator/accent-not-equals-en
@@ -168,34 +164,23 @@ within/point-within-polygons
 within/points-within-polygon
 within/points-within-polygons
 
-# === `interpolate-hcl` / `interpolate-lab`: remaining fixtures need the typed
-# ColorArray value, not the HCL/LAB conversions (which are implemented).  (2 fixtures) ===
+# === interpolate-hcl / interpolate-lab: remaining fixtures need the typed
+# ColorArray value (conversions themselves are implemented).  (2 fixtures) ===
 interpolate-hcl/linear-color-array
 interpolate-lab/linear-color-array
 
-# === Compile-time checks that still need constant-folding (evaluating a
-# constant sub-expression at compile time to surface an error).  (2 fixtures) ===
+# === Compile-time checks still needing constant-folding of a sub-expression.  (2 fixtures) ===
 constant-folding/evaluation-error
 get/from-literal--missing
 
-# === Type-directed runtime coercion & special value types: outputs that depend
-# on the expected property type (implicit string->color / null-assertion) or on
-# typed values like Formatted, ResolvedImage, Padding, ColorArray,
-# ProjectionDefinition. The compile-time type pass lands these types, but eval
-# does not yet insert the coercions/assertions.  (16 fixtures) ===
+# === Special typed values (Formatted, ResolvedImage, Padding, ColorArray,
+# ProjectionDefinition) that eval does not yet construct.  (9 fixtures) ===
 array/default-value
-array/implicit-2
-array/implicit-3
-case/interpolated-output
 coalesce/error
 coalesce/inference
-constant-folding/to-color-inferred
-interpolate/global-state/missing-property
 interpolate/linear-color-array
 interpolate/linear-number-array
 interpolate/projection/higher-than-stop
 interpolate/projection/linear
 interpolate/projection/lower-than-stop
 interpolate/projection/same-from-to
-step/color
-to-string/implicit
