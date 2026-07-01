@@ -386,6 +386,11 @@ fn main() {
     collect(&root, &root, &mut fixtures);
     fixtures.sort();
 
+    if std::env::var_os("PARITY").is_some() {
+        run_parity(&fixtures);
+        return;
+    }
+
     let trials = fixtures
         .into_iter()
         .map(|(name, path)| {
@@ -399,6 +404,190 @@ fn main() {
         .collect();
 
     libtest_mimic::run(&args, trials).exit();
+}
+
+/// Assessment mode (`PARITY=1 cargo test --test spec`): instead of pass/fail,
+/// measure how closely our error *text* and location *key* match the fixtures'
+/// `expected.compiled.errors` (Tier B/C), and the per-input eval-error text.
+fn run_parity(fixtures: &[(String, PathBuf)]) {
+    // Compile-error parity.
+    let mut ce_total = 0usize; // fixtures expecting a compile error
+    let mut ce_raised = 0usize; // ... where we also raised one
+    let mut ce_msg_exact = 0usize; // ... with byte-identical message
+    let mut ce_key_present = 0usize; // ... whose expected key is non-empty
+    let mut ce_key_exact = 0usize; // ... where our key matches
+    let mut msg_mismatches: Vec<(String, String, String)> = Vec::new();
+    let mut key_mismatches: Vec<(String, String, String)> = Vec::new();
+
+    // Eval-error parity.
+    let mut ee_total = 0usize;
+    let mut ee_raised = 0usize;
+    let mut ee_msg_exact = 0usize;
+    let mut ee_mismatches: Vec<(String, String, String)> = Vec::new();
+
+    for (name, path) in fixtures {
+        let Ok(raw) = fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<Json>(&raw) else {
+            continue;
+        };
+        let Some(expression) = doc.get("expression") else {
+            continue;
+        };
+        let expected = doc.get("expected").cloned().unwrap_or(Json::Null);
+        let compiled_result = expected
+            .get("compiled")
+            .and_then(|c| c.get("result"))
+            .and_then(Json::as_str)
+            .unwrap_or("success");
+
+        // Legacy stop-function objects are converted before parsing.
+        let converted;
+        let expression = if expression.is_object() {
+            match doc.get("propertySpec") {
+                Some(spec) => {
+                    converted = convert_function(expression, spec);
+                    &converted
+                }
+                None => expression,
+            }
+        } else {
+            expression
+        };
+
+        let expected_type = doc.get("propertySpec").and_then(property_spec_type);
+        let coerce_top_string = doc
+            .get("propertySpec")
+            .and_then(|s| s.get("type"))
+            .and_then(Json::as_str)
+            == Some("string");
+        let compiled = parse(expression)
+            .and_then(|e| typecheck(&e, expected_type.as_ref(), coerce_top_string));
+
+        if compiled_result == "error" {
+            ce_total += 1;
+            let want = expected
+                .get("compiled")
+                .and_then(|c| c.get("errors"))
+                .and_then(Json::as_array)
+                .and_then(|a| a.first());
+            let want_msg = want
+                .and_then(|e| e.get("error"))
+                .and_then(Json::as_str)
+                .unwrap_or("");
+            let want_key = want
+                .and_then(|e| e.get("key"))
+                .and_then(Json::as_str)
+                .unwrap_or("");
+            if let Err(e) = &compiled {
+                ce_raised += 1;
+                let got_msg = e.to_string();
+                if got_msg == want_msg {
+                    ce_msg_exact += 1;
+                } else {
+                    msg_mismatches.push((name.clone(), want_msg.to_string(), got_msg));
+                }
+                if !want_key.is_empty() {
+                    ce_key_present += 1;
+                    if e.key == want_key {
+                        ce_key_exact += 1;
+                    } else {
+                        key_mismatches.push((name.clone(), want_key.to_string(), e.key.clone()));
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Successful compile: measure eval-error text against `{ "error": ... }`.
+        let Ok(expr) = compiled else { continue };
+        let empty = Vec::new();
+        let inputs = doc.get("inputs").and_then(Json::as_array).unwrap_or(&empty);
+        let outputs = expected
+            .get("outputs")
+            .and_then(Json::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let global_state: BTreeMap<String, Value> = doc
+            .get("globalState")
+            .and_then(Json::as_object)
+            .map(|o| {
+                o.iter()
+                    .map(|(k, v)| (k.clone(), Value::from_json(v)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (i, input) in inputs.iter().enumerate() {
+            let Some(want_msg) = outputs
+                .get(i)
+                .and_then(|o| o.get("error"))
+                .and_then(Json::as_str)
+            else {
+                continue;
+            };
+            ee_total += 1;
+            let Ok(ctx) = build_context(input) else {
+                continue;
+            };
+            let ctx = ctx.with_global_state(global_state.clone());
+            if let Err(e) = evaluate(&expr, &ctx) {
+                ee_raised += 1;
+                let got = e.to_string();
+                if got == want_msg {
+                    ee_msg_exact += 1;
+                } else {
+                    ee_mismatches.push((name.clone(), want_msg.to_string(), got));
+                }
+            }
+        }
+    }
+
+    let pct = |n: usize, d: usize| {
+        if d == 0 {
+            100.0
+        } else {
+            100.0 * n as f64 / d as f64
+        }
+    };
+    println!("\n=== Error-parity assessment ===\n");
+    println!("Compile errors (Tier B = message, Tier C = key):");
+    println!("  fixtures expecting a compile error : {ce_total}");
+    println!(
+        "  error raised by us                 : {ce_raised} ({:.1}%)",
+        pct(ce_raised, ce_total)
+    );
+    println!(
+        "  message byte-identical             : {ce_msg_exact} / {ce_total} ({:.1}%)",
+        pct(ce_msg_exact, ce_total)
+    );
+    println!(
+        "  location key matches               : {ce_key_exact} / {ce_key_present} non-empty keys ({:.1}%)",
+        pct(ce_key_exact, ce_key_present)
+    );
+    println!("\nEval errors:");
+    println!("  outputs expecting an error         : {ee_total}");
+    println!(
+        "  error raised by us                 : {ee_raised} ({:.1}%)",
+        pct(ee_raised, ee_total)
+    );
+    println!(
+        "  message byte-identical             : {ee_msg_exact} / {ee_total} ({:.1}%)",
+        pct(ee_msg_exact, ee_total)
+    );
+
+    let show = |title: &str, v: &[(String, String, String)], limit: usize| {
+        println!("\n--- {title} ({} total) ---", v.len());
+        for (name, want, got) in v.iter().take(limit) {
+            println!("  [{name}]\n    want: {want}\n    got : {got}");
+        }
+        if v.len() > limit {
+            println!("  ... and {} more", v.len() - limit);
+        }
+    };
+    show("compile message mismatches", &msg_mismatches, 60);
+    show("location key mismatches", &key_mismatches, 40);
+    show("eval message mismatches", &ee_mismatches, 40);
 }
 
 fn fixtures_root() -> PathBuf {

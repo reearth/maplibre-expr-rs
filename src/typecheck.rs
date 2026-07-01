@@ -586,7 +586,7 @@ impl Checker {
                 Expr::Literal(Value::String(s)) if s == "number" => Type::Number,
                 Expr::Literal(Value::String(s)) if s == "boolean" => Type::Boolean,
                 _ => return Err(ParseError::new(
-                    "The item type argument of \"array\" must be one of string, number, boolean.",
+                    "The item type argument of \"array\" must be one of string, number, boolean",
                 )),
             };
             (t, 1)
@@ -602,7 +602,7 @@ impl Checker {
                 }
                 _ => {
                     return Err(ParseError::new(
-                        "The length argument to \"array\" must be a positive integer literal.",
+                        "The length argument to \"array\" must be a positive integer literal",
                     ))
                 }
             }
@@ -738,7 +738,7 @@ impl Checker {
             Type::Boolean | Type::String | Type::Number | Type::Null | Type::Value
         ) {
             return Err(ParseError::new(format!(
-                "Expected first argument to be of type boolean, string, number or null, but found {t} instead."
+                "Expected first argument to be of type boolean, string, number or null, but found {t} instead"
             )));
         }
         Ok(node)

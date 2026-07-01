@@ -18,7 +18,7 @@ pub fn parse(json: &Json, opts: &Options) -> Result<Expr> {
     match json {
         Json::Array(items) => parse_array(items, opts),
         Json::Object(_) => Err(ParseError::new(
-            "Expected an array, but found an object instead.",
+            "Bare objects invalid. Use [\"literal\", {...}] instead.",
         )),
         _ => Ok(Expr::Literal(Value::from_json(json))),
     }
@@ -34,11 +34,21 @@ fn parse_all(args: &[Json], opts: &Options) -> Result<Vec<Expr>> {
 }
 
 fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
-    let first = items
-        .first()
-        .ok_or_else(|| ParseError::new("Expected an array with at least one element."))?;
+    let first = items.first().ok_or_else(|| {
+        ParseError::new(
+            "Expected an array with at least one element. If you wanted a literal array, use [\"literal\", []].",
+        )
+    })?;
     let op = first.as_str().ok_or_else(|| {
-        ParseError::new("Expression name must be a string, but found a non-string instead.")
+        // `typeof` in JS: arrays, objects and null all report as "object".
+        let found = match first {
+            Json::Number(_) => "number",
+            Json::Bool(_) => "boolean",
+            _ => "object",
+        };
+        ParseError::new(format!(
+            "Expression name must be a string, but found {found} instead. If you wanted a literal array, use [\"literal\", [...]]."
+        ))
     })?;
     let args = &items[1..];
 
@@ -693,7 +703,7 @@ fn validate_array_type_args(args: &[Json]) -> Result<()> {
         Some("string" | "number" | "boolean") => {}
         _ => {
             return Err(ParseError::new(
-                "The item type argument of \"array\" must be one of string, number, boolean.",
+                "The item type argument of \"array\" must be one of string, number, boolean",
             ))
         }
     }
@@ -704,7 +714,7 @@ fn validate_array_type_args(args: &[Json]) -> Result<()> {
                 Some(n) if n >= 0.0 && n.fract() == 0.0 => {}
                 _ => {
                     return Err(ParseError::new(
-                        "The length argument to \"array\" must be a positive integer literal.",
+                        "The length argument to \"array\" must be a positive integer literal",
                     ))
                 }
             }

@@ -552,11 +552,23 @@ impl Evaluator<'_> {
             Value::Array(a) => a,
             other => return Err(type_error("array", &other)),
         };
-        if index < 0.0 || index != index.trunc() || index as usize >= array.len() {
+        // Order mirrors MapLibre's `At`: negative, then out-of-range, then
+        // non-integer — each with its own message.
+        if index < 0.0 {
+            return Err(EvalError::new(format!(
+                "Array index out of bounds: {index} < 0."
+            )));
+        }
+        if index >= array.len() as f64 {
             return Err(EvalError::new(format!(
                 "Array index out of bounds: {} > {}.",
                 index,
                 array.len().saturating_sub(1)
+            )));
+        }
+        if index != index.trunc() {
+            return Err(EvalError::new(format!(
+                "Array index must be an integer, but found {index} instead."
             )));
         }
         Ok(array[index as usize].clone())
@@ -574,7 +586,7 @@ impl Evaluator<'_> {
         let found = match &haystack {
             Value::String(s) => s.contains(&js_string(&needle)),
             Value::Array(a) => a.iter().any(|v| values_equal(v, &needle)),
-            other => return Err(type_error("array or string", other)),
+            other => return Err(arg_type_error("second argument", "array or string", other)),
         };
         Ok(Value::Bool(found))
     }
@@ -591,7 +603,7 @@ impl Evaluator<'_> {
         match &haystack {
             Value::String(s) => Ok(Value::Number(str_index_of(s, &js_string(&needle), from))),
             Value::Array(a) => Ok(Value::Number(array_index_of(a, &needle, from))),
-            other => Err(type_error("array or string", other)),
+            other => Err(arg_type_error("second argument", "array or string", other)),
         }
     }
 
@@ -1027,6 +1039,38 @@ fn type_error(expected: &str, found: &Value) -> EvalError {
     })
 }
 
+/// Render a value for a "Could not parse ... from value '...'" message the way
+/// MapLibre does: `typeof input === 'string' ? input : JSON.stringify(input)`.
+fn coercion_value_repr(v: &Value) -> String {
+    fn stringify(v: &Value) -> String {
+        match v {
+            Value::Null => "null".to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Number(n) => crate::value::format_number(*n),
+            Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\"")),
+            Value::Array(a) => {
+                let parts: Vec<String> = a.iter().map(stringify).collect();
+                format!("[{}]", parts.join(","))
+            }
+            other => other.to_string(),
+        }
+    }
+    match v {
+        Value::String(s) => s.clone(),
+        other => stringify(other),
+    }
+}
+
+/// Like [`type_error`], but naming the offending argument (e.g. the `in` /
+/// `index-of` haystack is the "second argument").
+fn arg_type_error(arg: &'static str, expected: &str, found: &Value) -> EvalError {
+    EvalError::of(crate::error::EvalErrorKind::TypeMismatchArg {
+        arg,
+        expected: expected.to_string(),
+        found: found.type_name().to_string(),
+    })
+}
+
 /// A type-directed runtime assertion (`Expr::Assert`): the value must already
 /// be of the asserted type, or evaluation errors.
 fn assert_value(ty: &Type, v: Value) -> Result<Value> {
@@ -1062,7 +1106,8 @@ fn coerce_value(ty: &Type, v: Value) -> Result<Value> {
         Type::Color => match coerce_color(&v) {
             Some(c) => Ok(Value::Color(c)),
             None => Err(EvalError::new(format!(
-                "Could not parse color from value '{v}'"
+                "Could not parse color from value '{}'",
+                coercion_value_repr(&v)
             ))),
         },
         Type::Formatted => Ok(match v {
@@ -1100,13 +1145,19 @@ fn coerce_number_array(v: Value) -> Result<Value> {
             Ok(Value::NumberArray(out))
         }
         _ => Err(EvalError::new(format!(
-            "Could not parse numberArray from value '{v}'"
+            "Could not parse numberArray from value '{}'",
+            coercion_value_repr(&v)
         ))),
     }
 }
 
 fn coerce_padding(v: Value) -> Result<Value> {
-    let err = || EvalError::new(format!("Could not parse padding from value '{v}'"));
+    let err = || {
+        EvalError::new(format!(
+            "Could not parse padding from value '{}'",
+            coercion_value_repr(&v)
+        ))
+    };
     match &v {
         Value::Padding(_) => Ok(v),
         Value::Number(n) => Ok(Value::Padding([*n; 4])),
@@ -1127,7 +1178,12 @@ fn coerce_padding(v: Value) -> Result<Value> {
 }
 
 fn coerce_color_array(v: Value) -> Result<Value> {
-    let err = || EvalError::new(format!("Could not parse colorArray from value '{v}'"));
+    let err = || {
+        EvalError::new(format!(
+            "Could not parse colorArray from value '{}'",
+            coercion_value_repr(&v)
+        ))
+    };
     match &v {
         Value::ColorArray(_) => Ok(v),
         Value::Color(c) => Ok(Value::ColorArray(vec![*c])),
@@ -1160,7 +1216,8 @@ fn coerce_projection(v: Value) -> Result<Value> {
                 transition: t,
             })),
             _ => Err(EvalError::new(format!(
-                "Could not parse projection from value '{v}'"
+                "Could not parse projection from value '{}'",
+                coercion_value_repr(&v)
             ))),
         },
         _ => Err(EvalError::new(format!(

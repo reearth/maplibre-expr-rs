@@ -41,7 +41,10 @@ impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ParseErrorKind::Other(s) => write!(f, "{s}"),
-            ParseErrorKind::UnknownExpression(op) => write!(f, "Unknown expression name \"{op}\"."),
+            ParseErrorKind::UnknownExpression(op) => write!(
+                f,
+                "Unknown expression \"{op}\". If you wanted a literal array, use [\"literal\", [...]]."
+            ),
             ParseErrorKind::WrongArgCount {
                 op,
                 expected,
@@ -112,6 +115,13 @@ pub enum EvalErrorKind {
     Other(String),
     /// A value was not of the expected type.
     TypeMismatch { expected: String, found: String },
+    /// Like [`TypeMismatch`](Self::TypeMismatch), but naming the offending
+    /// argument (e.g. `"second argument"`) instead of the generic "value".
+    TypeMismatchArg {
+        arg: &'static str,
+        expected: String,
+        found: String,
+    },
 }
 
 impl fmt::Display for EvalErrorKind {
@@ -121,6 +131,14 @@ impl fmt::Display for EvalErrorKind {
             EvalErrorKind::TypeMismatch { expected, found } => write!(
                 f,
                 "Expected value to be of type {expected}, but found {found} instead."
+            ),
+            EvalErrorKind::TypeMismatchArg {
+                arg,
+                expected,
+                found,
+            } => write!(
+                f,
+                "Expected {arg} to be of type {expected}, but found {found} instead."
             ),
         }
     }
