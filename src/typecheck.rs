@@ -33,7 +33,54 @@ pub fn typecheck(
     // Top level: string-valued (not enum) properties coerce rather than assert.
     let (annotated, _) = reconcile(node, ty, expected, coerce_top_string)?;
     check_zoom_usage(&annotated)?;
+    check_constant_errors(&annotated)?;
     Ok(annotated)
+}
+
+/// Evaluate the largest constant sub-expressions at compile time; a runtime
+/// error in one becomes a compile error, matching MapLibre's constant folding.
+fn check_constant_errors(expr: &Expr) -> Result<(), ParseError> {
+    if is_constant(expr) {
+        if let Err(e) = crate::eval::eval(expr, &crate::context::EvaluationContext::default()) {
+            return Err(ParseError::new(e.to_string()));
+        }
+        Ok(())
+    } else {
+        for child in children(expr) {
+            check_constant_errors(child)?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether an expression is independent of the feature, zoom, and other runtime
+/// context (and so can be evaluated at compile time).
+fn is_constant(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(_) => true,
+        Expr::Var(_) | Expr::Within(_) | Expr::Distance(_) => false,
+        Expr::Assert(_, inner) | Expr::Coerce(_, inner) => is_constant(inner),
+        Expr::Call { op, args } => match op.as_str() {
+            // `get` reads the feature unless an explicit object is provided.
+            "get" => args.len() == 2 && args.iter().all(is_constant),
+            "zoom"
+            | "heatmap-density"
+            | "elevation"
+            | "line-progress"
+            | "sky-radial-progress"
+            | "raster-value"
+            | "measure-light"
+            | "accumulated"
+            | "properties"
+            | "id"
+            | "geometry-type"
+            | "feature-state"
+            | "global-state"
+            | "image" => false,
+            _ => args.iter().all(is_constant),
+        },
+        _ => children(expr).into_iter().all(is_constant),
+    }
 }
 
 /// A checked node paired with its inferred type.

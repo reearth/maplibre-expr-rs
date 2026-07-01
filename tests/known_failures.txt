@@ -1,8 +1,5 @@
-# Not-yet-passing: locale-specific collation (de/sv/dk/fr tailoring) and
-# compile-time constant folding of literal sub-expressions.
+# Not-yet-passing: locale-specific collation tailoring (de/sv umlaut ordering).
 collator/accent-equals-de                                
 collator/variable-gt                                     
 collator/variable-lteq                                   
-constant-folding/evaluation-error                        
-get/from-literal--missing                                
-test result: FAILED. 558 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: FAILED. 560 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
