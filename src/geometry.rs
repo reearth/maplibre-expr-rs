@@ -22,6 +22,24 @@ pub fn tile_coord(lng: f64, lat: f64, z: u32) -> P {
     ((mx * tiles * EXTENT).round(), (my * tiles * EXTENT).round())
 }
 
+/// Inverse of [`tile_coord`]: global tile coordinates back to `[lng, lat]`.
+pub fn lnglat_from_tile(gx: f64, gy: f64, z: u32) -> P {
+    use std::f64::consts::PI;
+    let tiles = 2f64.powi(z as i32);
+    let mx = gx / EXTENT / tiles;
+    let my = gy / EXTENT / tiles;
+    let lng = mx * 360.0 - 180.0;
+    let lat = (360.0 / PI) * ((180.0 - my * 360.0) * PI / 180.0).exp().atan() - 90.0;
+    (lng, lat)
+}
+
+/// Round-trip a `[lng, lat]` through global tile coordinates at zoom `z`,
+/// quantizing to tile resolution as MapLibre does before computing distances.
+pub fn tile_round_trip(lng: f64, lat: f64, z: u32) -> P {
+    let (gx, gy) = tile_coord(lng, lat, z);
+    lnglat_from_tile(gx, gy, z)
+}
+
 fn update_bbox(b: &mut BBox, p: P) {
     b[0] = b[0].min(p.0);
     b[1] = b[1].min(p.1);
@@ -65,7 +83,7 @@ fn two_sided(p1: P, p2: P, q1: P, q2: P) -> bool {
     (det1 > 0.0 && det2 < 0.0) || (det1 < 0.0 && det2 > 0.0)
 }
 
-fn segment_intersect(a: P, b: P, c: P, d: P) -> bool {
+pub fn segment_intersect(a: P, b: P, c: P, d: P) -> bool {
     let vp = (b.0 - a.0, b.1 - a.1);
     let vq = (d.0 - c.0, d.1 - c.1);
     if perp(vq, vp) == 0.0 {
@@ -81,12 +99,12 @@ fn line_intersect_polygon(p1: P, p2: P, polygon: &[Vec<P>]) -> bool {
     })
 }
 
-fn point_within_polygon(point: P, rings: &[Vec<P>]) -> bool {
+pub fn point_within_polygon(point: P, rings: &[Vec<P>], true_if_boundary: bool) -> bool {
     let mut inside = false;
     for ring in rings {
         for w in ring.windows(2) {
             if point_on_boundary(point, w[0], w[1]) {
-                return false;
+                return true_if_boundary;
             }
             if ray_intersect(point, w[0], w[1]) {
                 inside = !inside;
@@ -97,11 +115,16 @@ fn point_within_polygon(point: P, rings: &[Vec<P>]) -> bool {
 }
 
 fn point_within_polygons(point: P, polygons: &[Vec<Vec<P>>]) -> bool {
-    polygons.iter().any(|p| point_within_polygon(point, p))
+    polygons
+        .iter()
+        .any(|p| point_within_polygon(point, p, false))
 }
 
 fn line_within_polygon(line: &[P], polygon: &[Vec<P>]) -> bool {
-    if line.iter().any(|&p| !point_within_polygon(p, polygon)) {
+    if line
+        .iter()
+        .any(|&p| !point_within_polygon(p, polygon, false))
+    {
         return false;
     }
     !line
@@ -231,7 +254,7 @@ pub fn within(
 
 fn within_point(p: P, polys: &[Vec<Vec<P>>]) -> bool {
     if polys.len() == 1 {
-        point_within_polygon(p, &polys[0])
+        point_within_polygon(p, &polys[0], false)
     } else {
         point_within_polygons(p, polys)
     }

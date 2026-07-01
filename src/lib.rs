@@ -30,6 +30,7 @@
 mod ast;
 mod color;
 mod context;
+mod distance;
 mod error;
 mod eval;
 mod geometry;

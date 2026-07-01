@@ -3,6 +3,7 @@
 use serde_json::Value as Json;
 
 use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
+use crate::distance::SimpleGeom;
 use crate::error::ParseError;
 use crate::value::Value;
 
@@ -51,6 +52,7 @@ fn parse_array(items: &[Json]) -> Result<Expr> {
         "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args),
         "format" => parse_format(args),
         "within" => parse_within(args),
+        "distance" => parse_distance(args),
         "array" => {
             check_generic_arity(op, args.len())?;
             validate_array_type_args(args)?;
@@ -345,6 +347,102 @@ fn parse_within(args: &[Json]) -> Result<Expr> {
         return Err(err());
     }
     Ok(Expr::Within(polygons))
+}
+
+/// Parse `["distance", geojson]`, extracting the argument geometries (splitting
+/// any `Multi*` into simple Point/LineString/Polygon geometries).
+fn parse_distance(args: &[Json]) -> Result<Expr> {
+    let err = || {
+        ParseError::new(
+            "'distance' expression requires valid geojson object that contains geometry.",
+        )
+    };
+    if args.len() != 1 {
+        return Err(ParseError::new(
+            "'distance' expression requires exactly one argument.",
+        ));
+    }
+    let mut geoms: Vec<SimpleGeom> = Vec::new();
+    match args[0].get("type").and_then(Json::as_str) {
+        Some("FeatureCollection") => {
+            for feat in args[0]
+                .get("features")
+                .and_then(Json::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(g) = feat.get("geometry") {
+                    add_simple_geometry(g, &mut geoms);
+                }
+            }
+        }
+        Some("Feature") => {
+            if let Some(g) = args[0].get("geometry") {
+                add_simple_geometry(g, &mut geoms);
+            }
+        }
+        Some(_) => add_simple_geometry(&args[0], &mut geoms),
+        None => {}
+    }
+    if geoms.is_empty() {
+        return Err(err());
+    }
+    Ok(Expr::Distance(geoms))
+}
+
+fn parse_point(c: &Json) -> Option<(f64, f64)> {
+    let a = c.as_array()?;
+    Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+}
+
+fn parse_line(c: &Json) -> Vec<(f64, f64)> {
+    c.as_array()
+        .map(|a| a.iter().filter_map(parse_point).collect())
+        .unwrap_or_default()
+}
+
+/// Append the simple geometries of a GeoJSON geometry (splitting `Multi*`).
+fn add_simple_geometry(geom: &Json, out: &mut Vec<SimpleGeom>) {
+    let coords = geom.get("coordinates");
+    match geom.get("type").and_then(Json::as_str) {
+        Some("Point") => {
+            if let Some(p) = coords.and_then(parse_point) {
+                out.push(SimpleGeom::Point(p));
+            }
+        }
+        Some("MultiPoint") => {
+            for p in coords.and_then(Json::as_array).into_iter().flatten() {
+                if let Some(p) = parse_point(p) {
+                    out.push(SimpleGeom::Point(p));
+                }
+            }
+        }
+        Some("LineString") => {
+            if let Some(c) = coords {
+                out.push(SimpleGeom::Line(parse_line(c)));
+            }
+        }
+        Some("MultiLineString") => {
+            for l in coords.and_then(Json::as_array).into_iter().flatten() {
+                out.push(SimpleGeom::Line(parse_line(l)));
+            }
+        }
+        Some("Polygon") => {
+            if let Some(c) = coords.and_then(Json::as_array) {
+                if let Some(p) = parse_polygon(c) {
+                    out.push(SimpleGeom::Polygon(p));
+                }
+            }
+        }
+        Some("MultiPolygon") => {
+            for poly in coords.and_then(Json::as_array).into_iter().flatten() {
+                if let Some(p) = poly.as_array().and_then(|r| parse_polygon(r)) {
+                    out.push(SimpleGeom::Polygon(p));
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Parse a GeoJSON polygon (array of rings of `[lng, lat]`).

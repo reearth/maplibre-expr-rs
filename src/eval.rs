@@ -65,6 +65,18 @@ impl Evaluator<'_> {
                 };
                 Ok(Value::Bool(inside))
             }
+            Expr::Distance(geoms) => {
+                let d = match (
+                    self.ctx.canonical,
+                    self.ctx.feature.geometry_type.as_deref(),
+                ) {
+                    (Some((z, _, _)), Some(gt)) if !self.ctx.feature.geometry.is_empty() => {
+                        crate::distance::distance(&self.ctx.feature.geometry, gt, z, geoms)
+                    }
+                    _ => f64::NAN,
+                };
+                Ok(Value::Number(d))
+            }
             Expr::Assert(ty, inner) => {
                 let v = self.eval(inner)?;
                 assert_value(ty, v)

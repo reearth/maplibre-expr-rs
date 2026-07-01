@@ -84,6 +84,7 @@ impl Checker {
             Expr::Call { op, args } => self.infer_call(op, args, expected),
             Expr::Format(sections) => self.infer_format(sections),
             Expr::Within(polygons) => Ok((Expr::Within(polygons.clone()), Type::Boolean)),
+            Expr::Distance(geoms) => Ok((Expr::Distance(geoms.clone()), Type::Number)),
             // Annotations only appear in already-checked trees.
             Expr::Assert(t, inner) | Expr::Coerce(t, inner) => {
                 let (e, _) = self.infer(inner, None)?;
@@ -758,7 +759,7 @@ fn references_zoom(expr: &Expr) -> bool {
 fn children(expr: &Expr) -> Vec<&Expr> {
     let mut out: Vec<&Expr> = Vec::new();
     match expr {
-        Expr::Literal(_) | Expr::Var(_) | Expr::Within(_) => {}
+        Expr::Literal(_) | Expr::Var(_) | Expr::Within(_) | Expr::Distance(_) => {}
         Expr::Assert(_, inner) | Expr::Coerce(_, inner) => out.push(inner),
         Expr::Format(sections) => {
             for s in sections {

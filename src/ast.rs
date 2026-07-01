@@ -45,6 +45,8 @@ pub enum Expr {
     /// `["within", geojson]` — the argument polygons as `[lng, lat]` rings
     /// (a multipolygon: list of polygons, each a list of rings).
     Within(Vec<Vec<Vec<(f64, f64)>>>),
+    /// `["distance", geojson]` — the argument geometries in `[lng, lat]`.
+    Distance(Vec<crate::distance::SimpleGeom>),
     /// A runtime type assertion inserted by type checking: the inner expression
     /// must already produce the given type at runtime, or evaluation errors.
     Assert(Type, Box<Expr>),
