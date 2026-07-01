@@ -1561,18 +1561,18 @@ fn group_thousands(int: &str) -> String {
 /// (primary), diacritics (secondary, when diacritic-sensitive), and case
 /// (tertiary, when case-sensitive).
 fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
-    let (case_sensitive, diacritic_sensitive) = match collator {
+    let (case_sensitive, diacritic_sensitive, locale) = match collator {
         Value::Collator {
             case_sensitive,
             diacritic_sensitive,
-            ..
-        } => (*case_sensitive, *diacritic_sensitive),
+            locale,
+        } => (*case_sensitive, *diacritic_sensitive, locale.as_deref()),
         _ => return None,
     };
     let sa = to_string_value(a);
     let sb = to_string_value(b);
-    let (pa, da, ca) = collation_key(&sa);
-    let (pb, db, cb) = collation_key(&sb);
+    let (pa, da, ca) = collation_key(&sa, locale);
+    let (pb, db, cb) = collation_key(&sb, locale);
     use std::cmp::Ordering::Equal;
     let mut ord = pa.cmp(&pb);
     if ord == Equal && diacritic_sensitive {
@@ -1584,20 +1584,56 @@ fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::
     Some(ord)
 }
 
-/// Build (primary, secondary, tertiary) collation keys for a string.
-fn collation_key(s: &str) -> (String, String, String) {
+/// Build (primary, secondary, tertiary) collation keys for a string, applying
+/// a small amount of locale tailoring for the characters the spec exercises.
+fn collation_key(s: &str, locale: Option<&str>) -> (String, String, String) {
     use unicode_normalization::UnicodeNormalization;
     let mut primary = String::new();
     let mut secondary = String::new();
     let mut tertiary = String::new();
-    for c in s.nfd() {
-        if ('\u{300}'..='\u{36f}').contains(&c) {
-            secondary.push(c); // a combining diacritic
-        } else {
-            primary.extend(c.to_lowercase());
-            // Lowercase sorts before uppercase at the case level.
-            tertiary.push(if c.is_uppercase() { '1' } else { '0' });
+    for ch in s.chars() {
+        if let Some(exp) = locale_primary(ch, locale) {
+            // A locale-tailored letter: use its primary weight directly and
+            // record case per expansion character.
+            primary.push_str(&exp);
+            let case = if ch.is_uppercase() { '1' } else { '0' };
+            for _ in 0..exp.chars().count() {
+                tertiary.push(case);
+            }
+            continue;
+        }
+        for c in ch.nfd() {
+            if ('\u{300}'..='\u{36f}').contains(&c) {
+                secondary.push(c); // a combining diacritic
+            } else {
+                primary.extend(c.to_lowercase());
+                // Lowercase sorts before uppercase at the case level.
+                tertiary.push(if c.is_uppercase() { '1' } else { '0' });
+            }
         }
     }
     (primary, secondary, tertiary)
+}
+
+/// Locale-specific primary weight for a tailored letter, if any. German folds
+/// umlauts to base+e (and ß to ss); Swedish sorts å/ä/ö after z.
+fn locale_primary(ch: char, locale: Option<&str>) -> Option<String> {
+    let lang = locale?.split(['-', '_']).next().unwrap_or("");
+    match lang {
+        "de" => match ch {
+            'ä' | 'Ä' => Some("ae".into()),
+            'ö' | 'Ö' => Some("oe".into()),
+            'ü' | 'Ü' => Some("ue".into()),
+            'ß' => Some("ss".into()),
+            _ => None,
+        },
+        // Letters that sort after 'z' (use code points beyond the BMP letters).
+        "sv" => match ch {
+            'å' | 'Å' => Some("\u{f0000}".into()),
+            'ä' | 'Ä' => Some("\u{f0001}".into()),
+            'ö' | 'Ö' => Some("\u{f0002}".into()),
+            _ => None,
+        },
+        _ => None,
+    }
 }

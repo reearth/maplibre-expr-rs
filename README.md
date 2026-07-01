@@ -1,6 +1,7 @@
 # maplibre-expr
 
 A pure-Rust parser and evaluator for [MapLibre GL style expressions][spec].
+It passes the **entire** upstream expression conformance suite (563/563).
 
 It turns a MapLibre expression (JSON such as `["*", ["get", "x"], 2]`) into a
 typed tree with `parse`, optionally validates it with `typecheck`, then
@@ -63,29 +64,28 @@ run reads like:
 
 ```
 cargo test --test spec
-# test result: ok. 386 passed; 0 failed; 177 ignored; ...
+# test result: ok. 563 passed; 0 failed; 0 ignored; ...
 ```
 
 For every fixture it compiles the `expression` (`parse` + `typecheck`, with the
-expected type taken from the fixture's `propertySpec`), checking success vs.
-compile error, then evaluates it against each `input` and compares to the
-expected `output`, matching `{ "error": ... }` outputs against evaluation
-errors. Numbers are compared with the same 6-significant-figure `stripPrecision`
-rule the upstream suite uses; colors are compared premultiplied, matching
-MapLibre's internal `Color`.
+expected type taken from the fixture's `propertySpec`; legacy stop-function
+objects are converted first), checking success vs. compile error, then evaluates
+it against each `input` and compares to the expected `output`, matching
+`{ "error": ... }` outputs against evaluation errors. Numbers are compared with
+the same 6-significant-figure `stripPrecision` rule the upstream suite uses;
+colors are compared premultiplied, matching MapLibre's internal `Color`.
 
 **Scope note:** the harness verifies `compiled.result` (success/error) and the
 per-input `outputs`. It does **not** compare compile-error *messages* (only that
 an error is raised — see [Type checking](#type-checking)), nor assert the other
 static-analysis fields (`type`, `isFeatureConstant`, `isZoomConstant`).
 
-### The skip-list is the roadmap
+### The skip-list
 
-Fixtures that don't pass yet are listed in `tests/known_failures.txt` and
-reported as **ignored** rather than failing the build. That file is grouped by
-*reason* (unimplemented operators, HCL/LAB color spaces, compile-time type
-validation, type-context coercion, legacy function syntax), so it doubles as
-the to-do list. Nothing is skipped silently.
+`tests/known_failures.txt` lists any fixtures to report as **ignored** rather
+than failing the build; it is currently empty (the whole suite passes). It is
+the running to-do list should the vendored fixtures be refreshed to a newer
+spec — add a failing fixture's name to keep the build green while you catch up.
 
 To make progress: implement a behaviour, delete the corresponding line(s) from
 `known_failures.txt`, and the fixtures graduate to enforced tests.

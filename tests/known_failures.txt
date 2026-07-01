@@ -1,5 +1,2 @@
-# Not-yet-passing: locale-specific collation tailoring (de/sv umlaut ordering).
-collator/accent-equals-de                                
-collator/variable-gt                                     
-collator/variable-lteq                                   
-test result: FAILED. 560 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+# All 563 vendored expression fixtures currently pass. This file is the
+# running to-do list; keep it empty while the suite is fully green.
