@@ -1,11 +1,8 @@
 # Fixtures not yet passing, reported as `ignored` by the spec harness. Grouped
 # by reason so it doubles as a roadmap. Nothing is skipped silently.
 
-# === Legacy stop-function / collator object syntax (JSON object, not an array).  (1 fixtures) ===
-equal/collator-value
-
-# === Operators not yet implemented (legacy/distance/within/collator/format/
-# number-format/resolved-locale/is-supported-script/geo/locale builtins).  (147 fixtures) ===
+# === Operators not yet implemented (distance/within/collator/format/
+# number-format/resolved-locale/is-supported-script/geo/locale builtins).  (94 fixtures) ===
 collator/accent-equals-de
 collator/accent-lt-en
 collator/accent-not-equals-en
@@ -74,59 +71,6 @@ format/multiple-styles
 format/to-string
 heatmap-density/basic
 is-supported-script/default
-legacy/categorical/array
-legacy/categorical/array-default
-legacy/categorical/boolean
-legacy/categorical/boolean-default
-legacy/categorical/color
-legacy/categorical/color-default
-legacy/categorical/number
-legacy/categorical/number-default
-legacy/categorical/string
-legacy/categorical/string-default
-legacy/categorical/tokens
-legacy/exponential/array
-legacy/exponential/array-default
-legacy/exponential/base
-legacy/exponential/color
-legacy/exponential/color-default
-legacy/exponential/color-hcl
-legacy/exponential/color-lab
-legacy/exponential/composite
-legacy/exponential/composite-default
-legacy/exponential/duplicate-stops
-legacy/exponential/implicit
-legacy/exponential/number
-legacy/exponential/number-default
-legacy/identity/array
-legacy/identity/array-default
-legacy/identity/boolean
-legacy/identity/boolean-default
-legacy/identity/color
-legacy/identity/color-default
-legacy/identity/color_array
-legacy/identity/enum
-legacy/identity/enum-default
-legacy/identity/number
-legacy/identity/number-default
-legacy/identity/number_array
-legacy/identity/padding
-legacy/identity/string
-legacy/identity/string-default
-legacy/interval/array
-legacy/interval/array-default
-legacy/interval/color
-legacy/interval/color-default
-legacy/interval/composite
-legacy/interval/composite-default
-legacy/interval/duplicate-stops
-legacy/interval/implicit
-legacy/interval/number
-legacy/interval/number-default
-legacy/interval/string
-legacy/interval/string-default
-legacy/interval/tokens-property
-legacy/interval/tokens-zoom
 number-format/currency
 number-format/default
 number-format/precision
@@ -158,13 +102,13 @@ within/points-within-polygons
 interpolate-hcl/linear-color-array
 interpolate-lab/linear-color-array
 
-# === Compile-time checks still needing constant-folding of a sub-expression.  (2 fixtures) ===
+# === Compile-time checks still needing constant-folding of a sub-expression.  (3 fixtures) ===
 constant-folding/evaluation-error
+equal/collator-value
 get/from-literal--missing
 
-# === Special typed values (Formatted, Padding, ColorArray, ProjectionDefinition)
-# eval does not yet construct.  (9 fixtures) ===
-array/default-value
+# === Special typed values (Formatted, Padding, NumberArray, ColorArray,
+# ProjectionDefinition, enum) eval does not yet construct/coerce.  (12 fixtures) ===
 coalesce/error
 coalesce/inference
 interpolate/linear-color-array
@@ -173,3 +117,7 @@ interpolate/projection/higher-than-stop
 interpolate/projection/linear
 interpolate/projection/lower-than-stop
 interpolate/projection/same-from-to
+legacy/identity/color_array
+legacy/identity/enum
+legacy/identity/number_array
+legacy/identity/padding

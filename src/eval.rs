@@ -553,38 +553,52 @@ impl Evaluator<'_> {
     }
 
     fn op_array(&mut self, args: &[Expr]) -> Result<Value> {
-        // ["array", value] | ["array", type, value] | ["array", type, N, value]
-        let value = self.eval(&args[args.len() - 1])?;
-        let array = match value {
-            Value::Array(a) => a,
-            other => return Err(type_error("array", &other)),
+        // ["array", value] | ["array", type, value...] | ["array", type, N, value...]
+        // The item type is present with >= 2 args, the length (nullable) with
+        // >= 3; the remaining args are fallback value candidates.
+        let (item_type, n, value_start) = if args.len() >= 3 {
+            let ty = self.eval_string(&args[0])?;
+            let n = match self.eval(&args[1])? {
+                Value::Null => None,
+                Value::Number(x) => Some(x as usize),
+                other => return Err(type_error("number", &other)),
+            };
+            (Some(ty), n, 2)
+        } else if args.len() == 2 {
+            (Some(self.eval_string(&args[0])?), None, 1)
+        } else {
+            (None, None, 0)
         };
-        if args.len() == 1 {
-            return Ok(Value::Array(array));
-        }
-        let item_type = self.eval_string(&args[0])?;
-        if args.len() >= 3 {
-            let n = self.eval_number(&args[1])? as usize;
-            if array.len() != n {
-                return Err(type_error(
-                    &format!("array<{item_type}, {n}>"),
-                    &Value::Array(array),
-                ));
-            }
-        }
-        let matches = |v: &Value| match item_type.as_str() {
-            "string" => matches!(v, Value::String(_)),
-            "number" => matches!(v, Value::Number(_)),
-            "boolean" => matches!(v, Value::Bool(_)),
+        self.op_array_typed(item_type.as_deref(), n, &args[value_start..])
+    }
+
+    fn op_array_typed(
+        &mut self,
+        item_type: Option<&str>,
+        n: Option<usize>,
+        values: &[Expr],
+    ) -> Result<Value> {
+        let type_ok = |a: &[Value]| match item_type {
+            Some("string") => a.iter().all(|v| matches!(v, Value::String(_))),
+            Some("number") => a.iter().all(|v| matches!(v, Value::Number(_))),
+            Some("boolean") => a.iter().all(|v| matches!(v, Value::Bool(_))),
             _ => true,
         };
-        if !array.iter().all(matches) {
-            return Err(type_error(
-                &format!("array<{item_type}>"),
-                &Value::Array(array),
-            ));
+        let mut last = Value::Null;
+        for arg in values {
+            last = self.eval(arg)?;
+            if let Value::Array(a) = &last {
+                if n.is_none_or(|n| a.len() == n) && type_ok(a) {
+                    return Ok(last);
+                }
+            }
         }
-        Ok(Value::Array(array))
+        let desc = match (item_type, n) {
+            (Some(t), Some(n)) => format!("array<{t}, {n}>"),
+            (Some(t), None) => format!("array<{t}>"),
+            _ => "array".to_string(),
+        };
+        Err(type_error(&desc, &last))
     }
 
     fn op_to_number(&mut self, args: &[Expr]) -> Result<Value> {

@@ -432,12 +432,10 @@ impl Checker {
     }
 
     fn infer_array_assertion(&mut self, args: &[Expr]) -> R {
-        if args.len() == 1 {
-            let (node, _) = self.infer(&args[0], None)?;
-            return Ok((call("array", vec![node]), Type::array(Type::Value, None)));
-        }
-        let item_type =
-            match &args[0] {
+        // Item type present with >= 2 args; length (nullable) with >= 3; the
+        // remaining args are fallback value candidates.
+        let (item_type, mut value_start) = if args.len() >= 2 {
+            let t = match &args[0] {
                 Expr::Literal(Value::String(s)) if s == "string" => Type::String,
                 Expr::Literal(Value::String(s)) if s == "number" => Type::Number,
                 Expr::Literal(Value::String(s)) if s == "boolean" => Type::Boolean,
@@ -445,8 +443,14 @@ impl Checker {
                     "The item type argument of \"array\" must be one of string, number, boolean.",
                 )),
             };
+            (t, 1)
+        } else {
+            (Type::Value, 0)
+        };
         let n = if args.len() >= 3 {
+            value_start = 2;
             match &args[1] {
+                Expr::Literal(Value::Null) => None,
                 Expr::Literal(Value::Number(v)) if *v >= 0.0 && v.fract() == 0.0 => {
                     Some(*v as usize)
                 }
@@ -460,9 +464,10 @@ impl Checker {
             None
         };
         let ty = Type::array(item_type, n);
-        let mut new_args = self.infer_args(&args[..args.len() - 1])?;
-        let (value, _) = self.infer(&args[args.len() - 1], Some(&ty))?;
-        new_args.push(value);
+        let mut new_args = args[..value_start].to_vec();
+        for a in &args[value_start..] {
+            new_args.push(self.infer(a, Some(&Type::Value))?.0);
+        }
         Ok((call("array", new_args), ty))
     }
 

@@ -153,8 +153,9 @@ fn arity(op: &str) -> Option<(usize, Option<usize>)> {
         "number-format" => (2, Some(2)),
         "format" | "image" => (1, None),
 
-        // type assertions & conversions
-        "array" => (1, Some(3)),
+        // type assertions & conversions ("array" takes an optional item type
+        // and length prefix, then one or more fallback value candidates)
+        "array" => (1, None),
         "boolean" | "number" | "string" | "object" | "to-number" | "to-color" => (1, None),
         "to-boolean" | "to-string" | "to-rgba" | "typeof" => (1, Some(1)),
 
@@ -336,12 +337,15 @@ fn validate_array_type_args(args: &[Json]) -> Result<()> {
         }
     }
     if args.len() >= 3 {
-        match args[1].as_f64() {
-            Some(n) if n >= 0.0 && n.fract() == 0.0 => {}
-            _ => {
-                return Err(ParseError::new(
-                    "The length argument to \"array\" must be a positive integer literal.",
-                ))
+        // The length may be null (unspecified) or a non-negative integer.
+        if !args[1].is_null() {
+            match args[1].as_f64() {
+                Some(n) if n >= 0.0 && n.fract() == 0.0 => {}
+                _ => {
+                    return Err(ParseError::new(
+                        "The length argument to \"array\" must be a positive integer literal.",
+                    ))
+                }
             }
         }
     }
