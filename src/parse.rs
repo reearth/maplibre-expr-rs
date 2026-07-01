@@ -179,10 +179,17 @@ fn check_generic_arity(op: &str, argc: usize) -> Result<()> {
         .ok_or_else(|| ParseError::of(ParseErrorKind::UnknownExpression(op.to_string())))?;
     let (min, max) = range;
     if argc < min || max.is_some_and(|m| argc > m) {
+        // `to-boolean` / `to-string` are single-argument coercions with their
+        // own wording.
+        if op == "to-boolean" || op == "to-string" {
+            return Err(ParseError::new("Expected one argument."));
+        }
+        let plural = |n: usize| if n == 1 { "argument" } else { "arguments" };
         let expected = match max {
-            Some(m) if m == min => format!("{min}"),
-            Some(m) => format!("{min}..={m}"),
-            None => format!("at least {min}"),
+            Some(m) if m == min => format!("{min} {}", plural(min)),
+            Some(m) if m == min + 1 => format!("{min} or {m} arguments"),
+            Some(m) => format!("{min} to {m} arguments"),
+            None => format!("at least {min} arguments"),
         };
         return Err(ParseError::of(ParseErrorKind::WrongArgCount {
             op: op.to_string(),
@@ -287,7 +294,13 @@ fn parse_let(args: &[Json], opts: &Options) -> Result<Expr> {
 
 fn parse_match(args: &[Json], opts: &Options) -> Result<Expr> {
     // args = input, (label, output)+, default  =>  even count, >= 4.
-    if args.len() < 4 || !args.len().is_multiple_of(2) {
+    if args.len() < 4 {
+        return Err(ParseError::new(format!(
+            "Expected at least 4 arguments, but found only {}.",
+            args.len()
+        )));
+    }
+    if !args.len().is_multiple_of(2) {
         return Err(ParseError::new(
             "Expected an even number of arguments (>= 4) to 'match'.",
         ));
@@ -314,9 +327,7 @@ fn parse_match_labels(json: &Json) -> Result<Vec<Value>> {
     match json {
         Json::Array(items) => Ok(items.iter().map(Value::from_json).collect()),
         Json::Number(_) | Json::String(_) => Ok(vec![Value::from_json(json)]),
-        _ => Err(ParseError::new(
-            "Match labels must be numbers, strings, or arrays thereof.",
-        )),
+        _ => Err(ParseError::new("Branch labels must be numbers or strings.")),
     }
 }
 
@@ -337,7 +348,7 @@ fn parse_step(args: &[Json], opts: &Options) -> Result<Expr> {
         stops.push((stop, parse(&args[i + 1], opts)?));
         i += 2;
     }
-    check_ascending(&stops)?;
+    check_ascending("step", &stops)?;
     Ok(Expr::Step {
         input: Box::new(input),
         output0: Box::new(output0),
@@ -362,7 +373,7 @@ fn parse_interpolate(space: InterpSpace, args: &[Json], opts: &Options) -> Resul
         stops.push((stop, parse(&args[i + 1], opts)?));
         i += 2;
     }
-    check_ascending(&stops)?;
+    check_ascending("interpolate", &stops)?;
     Ok(Expr::Interpolate {
         kind,
         space,
@@ -380,7 +391,7 @@ fn parse_collator(args: &[Json], opts: &Options) -> Result<Expr> {
     }
     let obj = args[0]
         .as_object()
-        .ok_or_else(|| ParseError::new("'collator' argument must be an options object."))?;
+        .ok_or_else(|| ParseError::new("Collator options argument must be an object."))?;
     let opt = |key: &str| -> Result<Option<Box<Expr>>> {
         match obj.get(key) {
             Some(v) => Ok(Some(Box::new(parse(v, opts)?))),
@@ -406,7 +417,7 @@ fn parse_number_format(args: &[Json], opts: &Options) -> Result<Expr> {
         .ok_or_else(|| ParseError::new("'number-format' options must be an object."))?;
     if obj.contains_key("currency") && obj.contains_key("unit") {
         return Err(ParseError::new(
-            "Cannot use both 'currency' and 'unit' in 'number-format'.",
+            "NumberFormat options `currency` and `unit` are mutually exclusive",
         ));
     }
     let opt = |key: &str| -> Result<Option<Box<Expr>>> {
@@ -432,9 +443,10 @@ fn parse_within(args: &[Json]) -> Result<Expr> {
         )
     };
     if args.len() != 1 {
-        return Err(ParseError::new(
-            "'within' expression requires exactly one argument.",
-        ));
+        return Err(ParseError::new(format!(
+            "'within' expression requires exactly one argument, but found {} instead.",
+            args.len()
+        )));
     }
     let geojson = &args[0];
     let mut polygons: Vec<Vec<Vec<(f64, f64)>>> = Vec::new();
@@ -492,13 +504,14 @@ fn parse_within(args: &[Json]) -> Result<Expr> {
 fn parse_distance(args: &[Json]) -> Result<Expr> {
     let err = || {
         ParseError::new(
-            "'distance' expression requires valid geojson object that contains geometry.",
+            "'distance' expression requires valid geojson object that contains polygon geometry type.",
         )
     };
     if args.len() != 1 {
-        return Err(ParseError::new(
-            "'distance' expression requires exactly one argument.",
-        ));
+        return Err(ParseError::new(format!(
+            "'distance' expression requires exactly one argument, but found {} instead.",
+            args.len()
+        )));
     }
     let mut geoms: Vec<SimpleGeom> = Vec::new();
     match args[0].get("type").and_then(Json::as_str) {
@@ -660,10 +673,9 @@ fn parse_interp_kind(json: &Json) -> Result<InterpKind> {
     match name {
         "linear" => Ok(InterpKind::Linear),
         "exponential" => {
-            let base = items
-                .get(1)
-                .and_then(Json::as_f64)
-                .ok_or_else(|| ParseError::new("'exponential' interpolation requires a base."))?;
+            let base = items.get(1).and_then(Json::as_f64).ok_or_else(|| {
+                ParseError::new("Exponential interpolation requires a numeric base.")
+            })?;
             Ok(InterpKind::Exponential(base))
         }
         "cubic-bezier" => {
@@ -723,12 +735,12 @@ fn validate_array_type_args(args: &[Json]) -> Result<()> {
     Ok(())
 }
 
-fn check_ascending(stops: &[(f64, Expr)]) -> Result<()> {
+fn check_ascending(kind: &str, stops: &[(f64, Expr)]) -> Result<()> {
     for pair in stops.windows(2) {
         if pair[1].0 <= pair[0].0 {
-            return Err(ParseError::new(
-                "Stop inputs must be arranged in strictly ascending order.",
-            ));
+            return Err(ParseError::new(format!(
+                "Input/output pairs for \"{kind}\" expressions must be arranged with input values in strictly ascending order."
+            )));
         }
     }
     Ok(())
@@ -737,9 +749,14 @@ fn check_ascending(stops: &[(f64, Expr)]) -> Result<()> {
 fn expect_arity(op: &str, args: &[Json], n: usize) -> Result<()> {
     if args.len() == n {
         Ok(())
+    } else if n == 1 {
+        Err(ParseError::new(format!(
+            "'{op}' expression requires exactly one argument, but found {} instead.",
+            args.len()
+        )))
     } else {
         Err(ParseError::new(format!(
-            "Expected {n} argument(s) to '{op}', but found {}.",
+            "Expected {n} arguments, but found {} instead.",
             args.len()
         )))
     }

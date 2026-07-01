@@ -469,7 +469,7 @@ impl Checker {
                 let (input, t) = self.infer(&args[0], None)?;
                 if !matches!(t, Type::Array(..) | Type::String | Type::Value) {
                     return Err(ParseError::new(format!(
-                        "Expected first argument to be of type array or string, but found {t} instead."
+                        "Expected first argument to be of type array or string, but found {t} instead"
                     )));
                 }
                 let mut new_args = vec![input];
@@ -539,6 +539,20 @@ impl Checker {
                 lhs: lt.to_string(),
                 rhs: rt.to_string(),
             }));
+        }
+        // For ordered comparisons, if exactly one operand is statically `value`
+        // and the other is a concrete string/number, MapLibre asserts the
+        // untyped operand to the other's type at runtime (yielding an
+        // "Expected value to be of type ..." error on mismatch). When both are
+        // `value`, the runtime combined-signature check in `op_cmp` handles it.
+        let (mut lhs, mut rhs) = (lhs, rhs);
+        if matches!(op, "<" | ">" | "<=" | ">=") {
+            let concrete = |t: &Type| matches!(t, Type::String | Type::Number);
+            if matches!(lt, Type::Value) && concrete(&rt) {
+                lhs = Expr::Assert(rt.clone(), Box::new(lhs));
+            } else if matches!(rt, Type::Value) && concrete(&lt) {
+                rhs = Expr::Assert(lt.clone(), Box::new(rhs));
+            }
         }
         let mut new_args = vec![lhs, rhs];
         if let Some(third) = args.get(2) {

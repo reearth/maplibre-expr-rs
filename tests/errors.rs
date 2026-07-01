@@ -19,8 +19,8 @@ fn unknown_expression_kind() {
 
 #[test]
 fn wrong_arg_count_kind() {
-    let e = compile_err(json!(["to-string", 1, 2]), None);
-    assert!(matches!(e.kind, ParseErrorKind::WrongArgCount { op, .. } if op == "to-string"));
+    let e = compile_err(json!(["length", 1, 2]), None);
+    assert!(matches!(e.kind, ParseErrorKind::WrongArgCount { op, .. } if op == "length"));
 }
 
 #[test]

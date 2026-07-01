@@ -49,10 +49,10 @@ impl fmt::Display for ParseErrorKind {
                 op,
                 expected,
                 found,
-            } => write!(
-                f,
-                "Wrong number of arguments to '{op}': expected {expected}, found {found}."
-            ),
+            } => {
+                let _ = op;
+                write!(f, "Expected {expected}, but found {found} instead.")
+            }
             ParseErrorKind::TypeMismatch { expected, found } => {
                 write!(f, "Expected {expected} but found {found} instead.")
             }
@@ -63,7 +63,10 @@ impl fmt::Display for ParseErrorKind {
                 write!(f, "Cannot compare types '{lhs}' and '{rhs}'.")
             }
             ParseErrorKind::NotInterpolatable(ty) => write!(f, "Type {ty} is not interpolatable."),
-            ParseErrorKind::UnboundVariable(name) => write!(f, "Unknown variable \"{name}\"."),
+            ParseErrorKind::UnboundVariable(name) => write!(
+                f,
+                "Unknown variable \"{name}\". Make sure \"{name}\" has been bound in an enclosing \"let\" expression before using it."
+            ),
             ParseErrorKind::Zoom(msg) => write!(f, "{msg}"),
         }
     }

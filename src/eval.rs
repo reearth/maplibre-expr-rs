@@ -441,10 +441,10 @@ impl Evaluator<'_> {
             "coalesce" => self.op_coalesce(args),
             "==" => self.op_eq(args, true),
             "!=" => self.op_eq(args, false),
-            "<" => self.op_cmp(args, Ordering::Lt),
-            ">" => self.op_cmp(args, Ordering::Gt),
-            "<=" => self.op_cmp(args, Ordering::Le),
-            ">=" => self.op_cmp(args, Ordering::Ge),
+            "<" => self.op_cmp(op, args, Ordering::Lt),
+            ">" => self.op_cmp(op, args, Ordering::Gt),
+            "<=" => self.op_cmp(op, args, Ordering::Le),
+            ">=" => self.op_cmp(op, args, Ordering::Ge),
 
             // --- arithmetic ---
             "+" => self.fold_num(args, 0.0, |a, b| a + b),
@@ -633,7 +633,7 @@ impl Evaluator<'_> {
                 let (a, b) = js_slice_bounds(begin, end, chars.len());
                 Ok(Value::String(chars[a..b].iter().collect()))
             }
-            other => Err(type_error("string or array", &other)),
+            other => Err(arg_type_error("first argument", "array or string", &other)),
         }
     }
 
@@ -711,7 +711,7 @@ impl Evaluator<'_> {
         Ok(Value::Bool(equal == want_equal))
     }
 
-    fn op_cmp(&mut self, args: &[Expr], ord: Ordering) -> Result<Value> {
+    fn op_cmp(&mut self, op: &str, args: &[Expr], ord: Ordering) -> Result<Value> {
         let a = self.eval(&args[0])?;
         let b = self.eval(&args[1])?;
         if let Some(c) = self.eval_collator(args)? {
@@ -720,11 +720,15 @@ impl Evaluator<'_> {
         let result = match (&a, &b) {
             (Value::Number(x), Value::Number(y)) => ord.test(x.partial_cmp(y)),
             (Value::String(x), Value::String(y)) => ord.test(Some(x.cmp(y))),
+            // Reached only when both operands were statically `value` (a single
+            // typed operand is asserted at type-check time), so their runtime
+            // types disagree or aren't ordered — MapLibre's combined-signature
+            // error.
             _ => {
                 return Err(EvalError::new(format!(
-                    "Cannot compare {} and {}.",
-                    a.type_name(),
-                    b.type_name()
+                    "Expected arguments for \"{op}\" to be (string, string) or (number, number), but found ({}, {}) instead.",
+                    runtime_type_str(&a),
+                    runtime_type_str(&b)
                 )))
             }
         };
@@ -905,7 +909,7 @@ impl Evaluator<'_> {
         }
         Err(EvalError::new(format!(
             "Could not convert {} to number.",
-            last.type_name()
+            json_stringify(&last)
         )))
     }
 
@@ -917,10 +921,17 @@ impl Evaluator<'_> {
                 return Ok(Value::Color(c));
             }
         }
-        Err(EvalError::new(format!(
-            "Could not parse {} as a color.",
-            last.type_name()
-        )))
+        Err(match &last {
+            // An array of the wrong length/shape has its own message.
+            Value::Array(_) => EvalError::new(format!(
+                "Invalid rgba value {}: expected an array containing either three or four numeric values.",
+                json_stringify(&last)
+            )),
+            other => EvalError::new(format!(
+                "Could not parse color from value '{}'",
+                coercion_value_repr(other)
+            )),
+        })
     }
 
     fn op_to_rgba(&mut self, args: &[Expr]) -> Result<Value> {
@@ -945,16 +956,20 @@ impl Evaluator<'_> {
         } else {
             1.0
         };
-        for (chan, v) in [("red", r), ("green", g), ("blue", b)] {
-            if !(0.0..=255.0).contains(&v) {
-                return Err(EvalError::new(format!(
-                    "Invalid {chan} component {v}: expected a number between 0 and 255."
-                )));
-            }
+        let rgba = || {
+            use crate::value::format_number as f;
+            format!("[{}, {}, {}, {}]", f(r), f(g), f(b), f(a))
+        };
+        if [r, g, b].iter().any(|v| !(0.0..=255.0).contains(v)) {
+            return Err(EvalError::new(format!(
+                "Invalid rgba value {}: 'r', 'g', and 'b' must be between 0 and 255.",
+                rgba()
+            )));
         }
         if !(0.0..=1.0).contains(&a) {
             return Err(EvalError::new(format!(
-                "Invalid alpha component {a}: expected a number between 0 and 1."
+                "Invalid rgba value {}: 'a' must be between 0 and 1.",
+                rgba()
             )));
         }
         Ok(Value::Color(Color::from_rgba8(r, g, b, a)))
@@ -1032,32 +1047,73 @@ fn type_string(v: &Value) -> String {
     }
 }
 
+/// The runtime type of a value, rendered the way MapLibre's `typeOf` +
+/// `toString` do: arrays become `array<itemType, length>`, where the item type
+/// is the common element type or `value` when they differ.
+fn runtime_type_str(v: &Value) -> String {
+    match v {
+        Value::Array(a) => {
+            let mut item: Option<String> = None;
+            for e in a {
+                let t = runtime_type_str(e);
+                match &item {
+                    None => item = Some(t),
+                    Some(prev) if *prev == t => {}
+                    Some(_) => {
+                        item = Some("value".to_string());
+                        break;
+                    }
+                }
+            }
+            format!(
+                "array<{}, {}>",
+                item.unwrap_or_else(|| "value".to_string()),
+                a.len()
+            )
+        }
+        other => other.type_name().to_string(),
+    }
+}
+
 fn type_error(expected: &str, found: &Value) -> EvalError {
     EvalError::of(crate::error::EvalErrorKind::TypeMismatch {
         expected: expected.to_string(),
-        found: found.type_name().to_string(),
+        found: runtime_type_str(found),
     })
+}
+
+/// A `JSON.stringify`-equivalent rendering of a value (strings quoted, arrays
+/// and objects compact), used verbatim in several MapLibre error messages.
+fn json_stringify(v: &Value) -> String {
+    match v {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => crate::value::format_number(*n),
+        Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\"")),
+        Value::Array(a) => {
+            let parts: Vec<String> = a.iter().map(json_stringify).collect();
+            format!("[{}]", parts.join(","))
+        }
+        Value::Object(o) => {
+            let parts: Vec<String> = o
+                .iter()
+                .map(|(k, val)| {
+                    let key = serde_json::to_string(k).unwrap_or_else(|_| format!("\"{k}\""));
+                    format!("{key}:{}", json_stringify(val))
+                })
+                .collect();
+            format!("{{{}}}", parts.join(","))
+        }
+        other => other.to_string(),
+    }
 }
 
 /// Render a value for a "Could not parse ... from value '...'" message the way
 /// MapLibre does: `typeof input === 'string' ? input : JSON.stringify(input)`.
 fn coercion_value_repr(v: &Value) -> String {
-    fn stringify(v: &Value) -> String {
-        match v {
-            Value::Null => "null".to_string(),
-            Value::Bool(b) => b.to_string(),
-            Value::Number(n) => crate::value::format_number(*n),
-            Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\"")),
-            Value::Array(a) => {
-                let parts: Vec<String> = a.iter().map(stringify).collect();
-                format!("[{}]", parts.join(","))
-            }
-            other => other.to_string(),
-        }
-    }
     match v {
         Value::String(s) => s.clone(),
-        other => stringify(other),
+        other => json_stringify(other),
     }
 }
 
@@ -1067,7 +1123,7 @@ fn arg_type_error(arg: &'static str, expected: &str, found: &Value) -> EvalError
     EvalError::of(crate::error::EvalErrorKind::TypeMismatchArg {
         arg,
         expected: expected.to_string(),
-        found: found.type_name().to_string(),
+        found: runtime_type_str(found),
     })
 }
 
