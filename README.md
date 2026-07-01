@@ -1,12 +1,30 @@
 # maplibre-expr
 
-A pure-Rust parser and evaluator for [MapLibre GL style expressions][spec].
-It passes the **entire** upstream expression conformance suite (563/563).
+A pure-Rust parser and evaluator for [MapLibre GL style expressions][spec] that
+aims to behave **exactly** like the reference implementation — not just the same
+results, but the same compile errors, in the same places.
+
+- 🎯 **Exhaustive compatibility.** Passes the **entire** upstream conformance
+  suite — **563/563** fixtures, zero skipped. Every operator, legacy
+  stop-function, type coercion, and edge case behaves like `maplibre-gl-js`.
+- 🧭 **Byte-exact errors.** Compile- and eval-error messages match MapLibre's
+  wording **character-for-character**, and each compile error carries the same
+  location `key` (e.g. `"[4][0]"`). The test harness enforces this, so the
+  parity can't silently regress.
+- 🦀 **Pure Rust, tiny surface.** No rendering, no I/O, no C deps — just
+  `serde_json` and a pure-Rust ICU for locale-aware collation. Works anywhere
+  Rust does.
+- 🧱 **Real pipeline.** `parse` → optional static `typecheck` (the same
+  type-inference/coercion pass MapLibre runs) → `evaluate` against a
+  zoom + feature context. Full coverage: `match`/`step`/`interpolate`, `format`,
+  `collator`, `within`/`distance` geometry, `number-format`, images, and more.
+- 🔌 **Extensible.** Plug in your own operators as macros, recursive functions,
+  or native Rust closures — without forking the language.
 
 It turns a MapLibre expression (JSON such as `["*", ["get", "x"], 2]`) into a
 typed tree with `parse`, optionally validates it with `typecheck`, then
 evaluates that tree against an `EvaluationContext` (zoom + feature) with
-`evaluate`. No rendering, no I/O — just the expression language.
+`evaluate`.
 
 ```rust
 use maplibre_expr::{parse, evaluate, EvaluationContext, Feature, Value};
