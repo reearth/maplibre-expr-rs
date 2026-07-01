@@ -12,7 +12,7 @@
 //! the same type-directed coercions (e.g. a string output where a color is
 //! expected).
 
-use crate::ast::{Expr, InterpKind, InterpSpace};
+use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
 use crate::error::ParseError;
 use crate::typ::{is_subtype, Type};
 use crate::value::Value;
@@ -82,6 +82,7 @@ impl Checker {
                 stops,
             } => self.infer_interpolate(*kind, *space, input, stops, expected),
             Expr::Call { op, args } => self.infer_call(op, args, expected),
+            Expr::Format(sections) => self.infer_format(sections),
             // Annotations only appear in already-checked trees.
             Expr::Assert(t, inner) | Expr::Coerce(t, inner) => {
                 let (e, _) = self.infer(inner, None)?;
@@ -511,6 +512,35 @@ impl Checker {
         ))
     }
 
+    fn infer_format(&mut self, sections: &[FormatArg]) -> R {
+        let mut new_sections = Vec::with_capacity(sections.len());
+        for s in sections {
+            let (content, ct) = self.infer(&s.content, Some(&Type::Value))?;
+            if !matches!(
+                ct,
+                Type::String | Type::Value | Type::Null | Type::ResolvedImage
+            ) {
+                return Err(ParseError::new(
+                    "Formatted text type must be 'string', 'value', 'image' or 'null'.",
+                ));
+            }
+            let mut opt = |e: &Option<Expr>, ty: Type| -> Result<Option<Expr>, ParseError> {
+                match e {
+                    Some(e) => Ok(Some(self.infer(e, Some(&ty))?.0)),
+                    None => Ok(None),
+                }
+            };
+            new_sections.push(FormatArg {
+                content,
+                scale: opt(&s.scale, Type::Number)?,
+                font: opt(&s.font, Type::array(Type::String, None))?,
+                text_color: opt(&s.text_color, Type::Color)?,
+                vertical_align: opt(&s.vertical_align, Type::String)?,
+            });
+        }
+        Ok((Expr::Format(new_sections), Type::Formatted))
+    }
+
     fn check_search_needle(&mut self, needle: &Expr) -> Result<Expr, ParseError> {
         let (node, t) = self.infer(needle, Some(&Type::Value))?;
         if !matches!(
@@ -729,6 +759,16 @@ fn children(expr: &Expr) -> Vec<&Expr> {
     match expr {
         Expr::Literal(_) | Expr::Var(_) => {}
         Expr::Assert(_, inner) | Expr::Coerce(_, inner) => out.push(inner),
+        Expr::Format(sections) => {
+            for s in sections {
+                out.push(&s.content);
+                for opt in [&s.scale, &s.font, &s.text_color, &s.vertical_align] {
+                    if let Some(e) = opt {
+                        out.push(e);
+                    }
+                }
+            }
+        }
         Expr::Let { bindings, body } => {
             for (_, v) in bindings {
                 out.push(v);

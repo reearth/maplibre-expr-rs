@@ -646,6 +646,22 @@ fn value_to_json(value: &Value) -> Json {
         Value::Image { name, available } => {
             serde_json::json!({ "name": name, "available": available })
         }
+        Value::Formatted(sections) => {
+            let secs: Vec<Json> = sections
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "text": s.text,
+                        "image": s.image.as_ref().map(|(n, a)| serde_json::json!({"name": n, "available": a})),
+                        "scale": s.scale,
+                        "fontStack": s.font_stack,
+                        "textColor": s.text_color.map(|c| serde_json::json!({"r": c.r, "g": c.g, "b": c.b, "a": c.a})),
+                        "verticalAlign": s.vertical_align,
+                    })
+                })
+                .collect();
+            serde_json::json!({ "sections": secs })
+        }
     }
 }
 

@@ -1,11 +1,11 @@
 //! Evaluating a parsed [`Expr`] against an [`EvaluationContext`].
 
-use crate::ast::{Expr, InterpKind, InterpSpace};
+use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
 use crate::color::Color;
 use crate::context::EvaluationContext;
 use crate::error::EvalError;
 use crate::typ::{is_subtype, Type};
-use crate::value::Value;
+use crate::value::{FormatSection, Value};
 
 type Result<T> = std::result::Result<T, EvalError>;
 
@@ -52,6 +52,7 @@ impl Evaluator<'_> {
                 stops,
             } => self.eval_interpolate(*kind, *space, input, stops),
             Expr::Call { op, args } => self.eval_call(op, args),
+            Expr::Format(sections) => self.eval_format(sections),
             Expr::Assert(ty, inner) => {
                 let v = self.eval(inner)?;
                 assert_value(ty, v)
@@ -154,6 +155,57 @@ impl Evaluator<'_> {
             },
             other => Ok(other),
         }
+    }
+
+    fn eval_format(&mut self, sections: &[FormatArg]) -> Result<Value> {
+        let mut out = Vec::with_capacity(sections.len());
+        for s in sections {
+            let content = self.eval(&s.content)?;
+            let vertical_align = match &s.vertical_align {
+                Some(e) => Some(self.eval_string(e)?),
+                None => None,
+            };
+            if let Value::Image { name, available } = content {
+                out.push(FormatSection {
+                    text: String::new(),
+                    image: Some((name, available)),
+                    scale: None,
+                    font_stack: None,
+                    text_color: None,
+                    vertical_align,
+                });
+                continue;
+            }
+            let scale = match &s.scale {
+                Some(e) => Some(self.eval_number(e)?),
+                None => None,
+            };
+            let font_stack = match &s.font {
+                Some(e) => match self.eval(e)? {
+                    Value::Array(a) => {
+                        Some(a.iter().map(to_string_value).collect::<Vec<_>>().join(","))
+                    }
+                    _ => None,
+                },
+                None => None,
+            };
+            let text_color = match &s.text_color {
+                Some(e) => match self.eval(e)? {
+                    Value::Color(c) => Some(c),
+                    _ => None,
+                },
+                None => None,
+            };
+            out.push(FormatSection {
+                text: to_string_value(&content),
+                image: None,
+                scale,
+                font_stack,
+                text_color,
+                vertical_align,
+            });
+        }
+        Ok(Value::Formatted(out))
     }
 
     fn eval_call(&mut self, op: &str, args: &[Expr]) -> Result<Value> {
@@ -720,6 +772,7 @@ fn type_string(v: &Value) -> String {
         Value::Number(_) => "number".to_string(),
         Value::String(_) => "string".to_string(),
         Value::Image { .. } => "resolvedImage".to_string(),
+        Value::Formatted(_) => "formatted".to_string(),
         Value::Color(_) => "color".to_string(),
         Value::Object(_) => "object".to_string(),
         Value::Array(items) => {
@@ -789,6 +842,17 @@ fn coerce_value(ty: &Type, v: Value) -> Result<Value> {
                 "Could not parse color from value '{v}'"
             ))),
         },
+        Type::Formatted => Ok(match v {
+            Value::Formatted(_) => v,
+            other => Value::Formatted(vec![FormatSection {
+                text: to_string_value(&other),
+                image: None,
+                scale: None,
+                font_stack: None,
+                text_color: None,
+                vertical_align: None,
+            }]),
+        }),
         // Types without a dedicated runtime coercion pass through unchanged.
         _ => Ok(v),
     }
@@ -902,6 +966,7 @@ fn to_string_value(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Color(c) => c.to_string(),
         Value::Image { name, .. } => name.clone(),
+        Value::Formatted(sections) => sections.iter().map(|s| s.text.clone()).collect(),
         Value::Array(_) | Value::Object(_) => json_string(v),
     }
 }
@@ -927,6 +992,10 @@ fn json_string(v: &Value) -> String {
         }
         Value::Image { name, available } => {
             format!("{{\"name\":{name:?},\"available\":{available}}}")
+        }
+        Value::Formatted(sections) => {
+            let s: String = sections.iter().map(|s| s.text.clone()).collect();
+            format!("{s:?}")
         }
     }
 }

@@ -20,6 +20,20 @@ pub enum Value {
         name: String,
         available: bool,
     },
+    /// Formatted text (the `format` operator): a list of styled sections.
+    Formatted(Vec<FormatSection>),
+}
+
+/// One styled section of a [`Value::Formatted`] value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormatSection {
+    pub text: String,
+    /// `(name, available)` for an image section.
+    pub image: Option<(String, bool)>,
+    pub scale: Option<f64>,
+    pub font_stack: Option<String>,
+    pub text_color: Option<Color>,
+    pub vertical_align: Option<String>,
 }
 
 impl Value {
@@ -34,6 +48,7 @@ impl Value {
             Value::Array(_) => "array",
             Value::Object(_) => "object",
             Value::Image { .. } => "resolvedImage",
+            Value::Formatted(_) => "formatted",
         }
     }
 
@@ -101,6 +116,12 @@ impl fmt::Display for Value {
             }
             Value::Object(_) => write!(f, "{self:?}"),
             Value::Image { name, .. } => write!(f, "{name}"),
+            Value::Formatted(sections) => {
+                for s in sections {
+                    write!(f, "{}", s.text)?;
+                }
+                Ok(())
+            }
         }
     }
 }

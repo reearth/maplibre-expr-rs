@@ -1,8 +1,8 @@
 # Fixtures not yet passing, reported as `ignored` by the spec harness. Grouped
 # by reason so it doubles as a roadmap. Nothing is skipped silently.
 
-# === Operators not yet implemented (distance/within/collator/format/
-# number-format/resolved-locale/is-supported-script/geo/locale builtins).  (94 fixtures) ===
+# === Operators not yet implemented (distance/within geometry, collator/
+# number-format/resolved-locale locale builtins, is-supported-script).  (84 fixtures) ===
 collator/accent-equals-de
 collator/accent-lt-en
 collator/accent-not-equals-en
@@ -59,16 +59,6 @@ distance/multi-line
 distance/multi-point
 distance/multi-polygon
 elevation/basic
-format/basic
-format/coercion
-format/data-driven-font
-format/data-driven-vertical-align
-format/image-sections
-format/implicit
-format/implicit-coerce
-format/implicit-omit
-format/multiple-styles
-format/to-string
 heatmap-density/basic
 is-supported-script/default
 number-format/currency
@@ -107,10 +97,11 @@ constant-folding/evaluation-error
 equal/collator-value
 get/from-literal--missing
 
-# === Special typed values (Formatted, Padding, NumberArray, ColorArray,
-# ProjectionDefinition, enum) eval does not yet construct/coerce.  (12 fixtures) ===
+# === Special typed values (Padding, NumberArray, ColorArray,
+# ProjectionDefinition, enum) eval does not yet construct/coerce.  (13 fixtures) ===
 coalesce/error
 coalesce/inference
+format/implicit-omit
 interpolate/linear-color-array
 interpolate/linear-number-array
 interpolate/projection/higher-than-stop

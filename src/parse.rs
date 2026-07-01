@@ -2,9 +2,12 @@
 
 use serde_json::Value as Json;
 
-use crate::ast::{Expr, InterpKind, InterpSpace};
+use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
 use crate::error::ParseError;
 use crate::value::Value;
+
+/// Valid `vertical-align` option values for the `format` operator.
+const VERTICAL_ALIGN: [&str; 3] = ["bottom", "center", "top"];
 
 type Result<T> = std::result::Result<T, ParseError>;
 
@@ -46,6 +49,7 @@ fn parse_array(items: &[Json]) -> Result<Expr> {
         "interpolate" => parse_interpolate(InterpSpace::Rgb, args),
         "interpolate-hcl" => parse_interpolate(InterpSpace::Hcl, args),
         "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args),
+        "format" => parse_format(args),
         "array" => {
             check_generic_arity(op, args.len())?;
             validate_array_type_args(args)?;
@@ -276,6 +280,57 @@ fn parse_interpolate(space: InterpSpace, args: &[Json]) -> Result<Expr> {
         input: Box::new(input),
         stops,
     })
+}
+
+fn parse_format(args: &[Json]) -> Result<Expr> {
+    if args.is_empty() {
+        return Err(ParseError::new(
+            "Expected at least one argument to 'format'.",
+        ));
+    }
+    if args[0].is_object() {
+        return Err(ParseError::new(
+            "First argument to 'format' must be an image or text section.",
+        ));
+    }
+    let mut sections: Vec<FormatArg> = Vec::new();
+    let mut next_may_be_object = false;
+    for arg in args {
+        if next_may_be_object && arg.is_object() {
+            next_may_be_object = false;
+            let obj = arg.as_object().unwrap();
+            let section = sections.last_mut().unwrap();
+            if let Some(v) = obj.get("font-scale") {
+                section.scale = Some(parse(v)?);
+            }
+            if let Some(v) = obj.get("text-font") {
+                section.font = Some(parse(v)?);
+            }
+            if let Some(v) = obj.get("text-color") {
+                section.text_color = Some(parse(v)?);
+            }
+            if let Some(v) = obj.get("vertical-align") {
+                if let Some(s) = v.as_str() {
+                    if !VERTICAL_ALIGN.contains(&s) {
+                        return Err(ParseError::new(format!(
+                            "'vertical-align' must be one of: 'bottom', 'center', 'top' but found '{s}' instead."
+                        )));
+                    }
+                }
+                section.vertical_align = Some(parse(v)?);
+            }
+        } else {
+            sections.push(FormatArg {
+                content: parse(arg)?,
+                scale: None,
+                font: None,
+                text_color: None,
+                vertical_align: None,
+            });
+            next_may_be_object = true;
+        }
+    }
+    Ok(Expr::Format(sections))
 }
 
 fn parse_interp_kind(json: &Json) -> Result<InterpKind> {

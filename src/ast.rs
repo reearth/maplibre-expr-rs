@@ -40,12 +40,24 @@ pub enum Expr {
         input: Box<Expr>,
         stops: Vec<(f64, Expr)>,
     },
+    /// `["format", content, options?, ...]` — styled text sections.
+    Format(Vec<FormatArg>),
     /// A runtime type assertion inserted by type checking: the inner expression
     /// must already produce the given type at runtime, or evaluation errors.
     Assert(Type, Box<Expr>),
     /// A runtime coercion inserted by type checking: the inner expression's
     /// value is converted to the given type (e.g. string → color).
     Coerce(Type, Box<Expr>),
+}
+
+/// One section of a `format` expression: content plus optional styling.
+#[derive(Debug, Clone)]
+pub struct FormatArg {
+    pub content: Expr,
+    pub scale: Option<Expr>,
+    pub font: Option<Expr>,
+    pub text_color: Option<Expr>,
+    pub vertical_align: Option<Expr>,
 }
 
 /// The interpolation curve used by an `interpolate` expression.
