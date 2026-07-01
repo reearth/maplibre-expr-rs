@@ -25,7 +25,7 @@ use crate::error::EvalError;
 use crate::value::Value;
 
 /// Maximum macro-expansion depth before assuming a recursive macro.
-pub(crate) const MAX_MACRO_DEPTH: usize = 256;
+pub(crate) const MAX_MACRO_DEPTH: usize = 64;
 /// Maximum user-function call depth before erroring. Kept conservative so deep
 /// recursion errors cleanly rather than overflowing the native stack.
 pub(crate) const MAX_CALL_DEPTH: usize = 64;

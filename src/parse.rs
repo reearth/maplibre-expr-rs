@@ -40,14 +40,9 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
         )
     })?;
     let op = first.as_str().ok_or_else(|| {
-        // `typeof` in JS: arrays, objects and null all report as "object".
-        let found = match first {
-            Json::Number(_) => "number",
-            Json::Bool(_) => "boolean",
-            _ => "object",
-        };
         ParseError::new(format!(
-            "Expression name must be a string, but found {found} instead. If you wanted a literal array, use [\"literal\", [...]]."
+            "Expression name must be a string, but found {} instead. If you wanted a literal array, use [\"literal\", [...]].",
+            js_typeof(first)
         ))
     })?;
     let args = &items[1..];
@@ -106,6 +101,21 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
         "number-format" => parse_number_format(args, opts),
         "within" => parse_within(args),
         "distance" => parse_distance(args),
+        "global-state" => {
+            check_generic_arity(op, args.len())?;
+            // The property must be a string *literal*; MapLibre reports the raw
+            // argument's JS `typeof` (an array/object/null all read "object").
+            if !args[0].is_string() {
+                return Err(ParseError::new(format!(
+                    "Global state property must be string, but found {} instead.",
+                    js_typeof(&args[0])
+                )));
+            }
+            Ok(Expr::Call {
+                op: op.to_string(),
+                args: parse_all(args, opts)?,
+            })
+        }
         "array" => {
             check_generic_arity(op, args.len())?;
             validate_array_type_args(args)?;
@@ -116,6 +126,9 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
             })
         }
         _ => {
+            if let Some(e) = signature_arity_error(op, args) {
+                return Err(e);
+            }
             check_generic_arity(op, args.len())?;
             let args = parse_all(args, opts)?;
             Ok(Expr::Call {
@@ -164,6 +177,38 @@ fn expand_macro(op: &str, args: &[Json], opts: &Options) -> Result<Expr> {
 /// Operators that MapLibre defines but this crate does not yet evaluate are
 /// still accepted here (so their arguments parse); evaluation reports them as
 /// unimplemented. Only genuinely unknown names are rejected.
+/// JavaScript's `typeof` for a JSON value: arrays, objects and `null` all
+/// report as `"object"`.
+fn js_typeof(v: &Json) -> &'static str {
+    match v {
+        Json::Number(_) => "number",
+        Json::Bool(_) => "boolean",
+        Json::String(_) => "string",
+        _ => "object",
+    }
+}
+
+/// A few operators are `CompoundExpression`s in MapLibre: a wrong argument
+/// count is reported against their typed overload signatures rather than a
+/// plain count. Returns the signature-form error when `op` is one of them and
+/// its arity is wrong (types are inferred coarsely from literal arguments).
+fn signature_arity_error(op: &str, args: &[Json]) -> Option<ParseError> {
+    let (sig, ok) = match op {
+        "e" | "pi" | "ln2" => ("()", args.is_empty()),
+        "typeof" => ("(value)", args.len() == 1),
+        "-" => ("(number, number) | (number)", (1..=2).contains(&args.len())),
+        _ => return None,
+    };
+    if ok {
+        return None;
+    }
+    let found: Vec<&str> = args.iter().map(js_typeof).collect();
+    Some(ParseError::new(format!(
+        "Expected arguments of type {sig}, but found ({}) instead.",
+        found.join(", ")
+    )))
+}
+
 fn check_generic_arity(op: &str, argc: usize) -> Result<()> {
     // `case` has an irregular (odd, >= 3) shape.
     if op == "case" {
