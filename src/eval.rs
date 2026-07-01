@@ -263,6 +263,15 @@ impl Evaluator<'_> {
                 let available = self.ctx.available_images.iter().any(|n| n == &name);
                 Ok(Value::Image { name, available })
             }
+            "heatmap-density" => Ok(Value::Number(self.ctx.heatmap_density.unwrap_or(0.0))),
+            "elevation" => Ok(Value::Number(self.ctx.elevation.unwrap_or(0.0))),
+            "line-progress" => Ok(Value::Number(self.ctx.line_progress.unwrap_or(0.0))),
+            // Without the RTL-text plugin the reference reports every script as
+            // supported.
+            "is-supported-script" => {
+                self.eval(&args[0])?;
+                Ok(Value::Bool(true))
+            }
             "typeof" => Ok(Value::String(type_string(&self.eval(&args[0])?))),
 
             // --- collections ---

@@ -1,8 +1,8 @@
 # Fixtures not yet passing, reported as `ignored` by the spec harness. Grouped
 # by reason so it doubles as a roadmap. Nothing is skipped silently.
 
-# === Operators not yet implemented (distance geometry, collator/number-format/
-# resolved-locale locale builtins, is-supported-script).  (63 fixtures) ===
+# === Operators not yet implemented (distance geometry; collator/number-format/
+# resolved-locale locale builtins).  (60 fixtures) ===
 collator/accent-equals-de
 collator/accent-lt-en
 collator/accent-not-equals-en
@@ -58,23 +58,18 @@ distance/from-simple-polygon/to-polygon-outside
 distance/multi-line
 distance/multi-point
 distance/multi-polygon
-elevation/basic
-heatmap-density/basic
-is-supported-script/default
 number-format/currency
 number-format/default
 number-format/precision
 number-format/unit
 resolved-locale/basic
 
-# === interpolate-hcl / interpolate-lab: remaining need the typed ColorArray value.  (2 fixtures) ===
-interpolate-hcl/linear-color-array
-interpolate-lab/linear-color-array
-
-# === Compile-time checks still needing constant-folding of a sub-expression.  (3 fixtures) ===
+# === Compile-time checks needing constant-folding, or collator-dependent.  (5 fixtures) ===
 constant-folding/evaluation-error
 equal/collator-value
 get/from-literal--missing
+interpolate-hcl/linear-color-array
+interpolate-lab/linear-color-array
 
 # === Special typed values (Padding, NumberArray, ColorArray,
 # ProjectionDefinition, enum) eval does not yet construct/coerce.  (13 fixtures) ===

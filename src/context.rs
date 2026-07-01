@@ -29,6 +29,12 @@ pub struct EvaluationContext {
     pub available_images: Vec<String>,
     /// The canonical tile `(z, x, y)` the feature belongs to, if any.
     pub canonical: Option<(u32, u32, u32)>,
+    /// Heatmap density (`heatmap-density`), 0..1.
+    pub heatmap_density: Option<f64>,
+    /// Terrain elevation (`elevation`).
+    pub elevation: Option<f64>,
+    /// Line progress along a symbol/line (`line-progress`), 0..1.
+    pub line_progress: Option<f64>,
 }
 
 impl EvaluationContext {

@@ -577,6 +577,10 @@ fn build_context(input: &Json) -> Result<EvaluationContext, Failed> {
             ctx.canonical = Some((z, x, y));
         }
     }
+    let global_num = |k| items.first().and_then(|g| g.get(k)).and_then(Json::as_f64);
+    ctx.heatmap_density = global_num("heatmapDensity");
+    ctx.elevation = global_num("elevation");
+    ctx.line_progress = global_num("lineProgress");
 
     if let Some(feature_json) = items.get(1) {
         ctx.feature = build_feature(feature_json);
