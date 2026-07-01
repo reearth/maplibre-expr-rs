@@ -46,6 +46,15 @@ fn parse_array(items: &[Json]) -> Result<Expr> {
         "interpolate" => parse_interpolate(InterpSpace::Rgb, args),
         "interpolate-hcl" => parse_interpolate(InterpSpace::Hcl, args),
         "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args),
+        "array" => {
+            check_generic_arity(op, args.len())?;
+            validate_array_type_args(args)?;
+            let parsed = args.iter().map(parse).collect::<Result<Vec<_>>>()?;
+            Ok(Expr::Call {
+                op: op.to_string(),
+                args: parsed,
+            })
+        }
         _ => {
             check_generic_arity(op, args.len())?;
             let args = args.iter().map(parse).collect::<Result<Vec<_>>>()?;
@@ -286,18 +295,57 @@ fn parse_interp_kind(json: &Json) -> Result<InterpKind> {
             Ok(InterpKind::Exponential(base))
         }
         "cubic-bezier" => {
+            let cubic_err = || {
+                ParseError::new(
+                    "Cubic bezier interpolation requires four numeric arguments with values between 0 and 1.",
+                )
+            };
+            // Exactly four control points, each in 0..=1.
+            if items.len() != 5 {
+                return Err(cubic_err());
+            }
             let n = |i: usize| items.get(i).and_then(Json::as_f64);
             match (n(1), n(2), n(3), n(4)) {
-                (Some(a), Some(b), Some(c), Some(d)) => Ok(InterpKind::CubicBezier(a, b, c, d)),
-                _ => Err(ParseError::new(
-                    "'cubic-bezier' interpolation requires four control-point values.",
-                )),
+                (Some(a), Some(b), Some(c), Some(d))
+                    if [a, b, c, d].iter().all(|v| (0.0..=1.0).contains(v)) =>
+                {
+                    Ok(InterpKind::CubicBezier(a, b, c, d))
+                }
+                _ => Err(cubic_err()),
             }
         }
         other => Err(ParseError::new(format!(
             "Unknown interpolation type \"{other}\"."
         ))),
     }
+}
+
+/// Validate the (optional) item-type and length arguments of `array` against
+/// the raw JSON: they must be a bare type name and a bare non-negative integer,
+/// not `["literal", ...]` sub-expressions.
+fn validate_array_type_args(args: &[Json]) -> Result<()> {
+    if args.len() < 2 {
+        return Ok(());
+    }
+    match args[0].as_str() {
+        Some("string" | "number" | "boolean") => {}
+        _ => {
+            return Err(ParseError::new(
+                "The item type argument of \"array\" must be one of string, number, boolean.",
+            ))
+        }
+    }
+    if args.len() >= 3 {
+        match args[1].as_f64() {
+            Some(n) if n >= 0.0 && n.fract() == 0.0 => {}
+            _ => {
+                return Err(ParseError::new(
+                    "The length argument to \"array\" must be a positive integer literal.",
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 fn check_ascending(stops: &[(f64, Expr)]) -> Result<()> {

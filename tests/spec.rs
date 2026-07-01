@@ -8,18 +8,18 @@
 //!   2. evaluate it against each input and compare to the expected output,
 //!      matching `{ "error": ... }` outputs against evaluation errors.
 //!
-//! Fixtures listed in `tests/known_failures.txt` are reported as *ignored*
-//! rather than failing — that file is the running to-do list of operators and
-//! behaviours not yet implemented. Nothing is skipped silently: the count of
-//! ignored fixtures is printed by the runner and the list is under version
-//! control.
+//! Compilation is modeled as parse + [`typecheck`] (the latter fed the expected
+//! type derived from the fixture's `propertySpec`). Fixtures listed in
+//! `tests/known_failures.txt` are reported as *ignored* rather than failing —
+//! that file is the running to-do list of operators and behaviours not yet
+//! implemented. Nothing is skipped silently: the count of ignored fixtures is
+//! printed by the runner and the list is under version control.
 //!
 //! ## Scope note
 //!
 //! This harness verifies `compiled.result` (success vs. error) and the
-//! per-input `outputs`. It does **not** yet assert the static-analysis fields
-//! (`type`, `isFeatureConstant`, `isZoomConstant`); adding a type-inference
-//! pass is future work.
+//! per-input `outputs`. It does **not** assert the other static-analysis fields
+//! (`type`, `isFeatureConstant`, `isZoomConstant`).
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -27,8 +27,42 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use libtest_mimic::{Arguments, Failed, Trial};
-use maplibre_expr::{evaluate, parse, EvaluationContext, Feature, Value};
+use maplibre_expr::{evaluate, parse, typecheck, EvaluationContext, Feature, Type, Value};
 use serde_json::Value as Json;
+
+/// Map a fixture's `propertySpec` to the expected expression [`Type`], so the
+/// type-checker sees the same expectation MapLibre derives from the spec.
+fn property_spec_type(spec: &Json) -> Option<Type> {
+    let scalar = |t: &str| match t {
+        "color" => Some(Type::Color),
+        "number" => Some(Type::Number),
+        "string" | "enum" => Some(Type::String),
+        "boolean" => Some(Type::Boolean),
+        "formatted" => Some(Type::Formatted),
+        "resolvedImage" => Some(Type::ResolvedImage),
+        "padding" => Some(Type::Padding),
+        "numberArray" => Some(Type::NumberArray),
+        "colorArray" => Some(Type::ColorArray),
+        "projectionDefinition" => Some(Type::ProjectionDefinition),
+        "variableAnchorOffsetCollection" => Some(Type::VariableAnchorOffsetCollection),
+        _ => None,
+    };
+    match spec.get("type").and_then(Json::as_str)? {
+        "array" => {
+            let item = spec
+                .get("value")
+                .and_then(Json::as_str)
+                .and_then(scalar)
+                .unwrap_or(Type::Value);
+            let n = spec
+                .get("length")
+                .and_then(Json::as_u64)
+                .map(|v| v as usize);
+            Some(Type::array(item, n))
+        }
+        other => scalar(other),
+    }
+}
 
 fn main() {
     let args = Arguments::from_args();
@@ -113,17 +147,22 @@ fn run_fixture(path: &Path) -> Result<(), Failed> {
         .and_then(Json::as_str)
         .unwrap_or("success");
 
-    let parsed = parse(expression);
+    // A fixture "compiles" if it both parses and type-checks. The expected
+    // type comes from the property spec, when present.
+    let expected_type = doc.get("propertySpec").and_then(property_spec_type);
+    let compiled =
+        parse(expression).and_then(|expr| typecheck(&expr, expected_type.as_ref()).map(|_| expr));
 
     if compiled_result == "error" {
-        return match parsed {
+        return match compiled {
             Err(_) => Ok(()),
-            Ok(_) => Err("expected a compile error, but the expression parsed successfully".into()),
+            Ok(_) => {
+                Err("expected a compile error, but the expression compiled successfully".into())
+            }
         };
     }
 
-    let expr =
-        parsed.map_err(|e| format!("expected successful compile, but parsing failed: {e}"))?;
+    let expr = compiled.map_err(|e| format!("expected successful compile, but failed: {e}"))?;
 
     let empty = Vec::new();
     let inputs = doc.get("inputs").and_then(Json::as_array).unwrap_or(&empty);

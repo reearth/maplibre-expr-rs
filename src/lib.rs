@@ -33,17 +33,28 @@ mod context;
 mod error;
 mod eval;
 mod parse;
+mod typ;
+mod typecheck;
 mod value;
 
 pub use ast::{Expr, InterpKind, InterpSpace};
 pub use color::Color;
 pub use context::{EvaluationContext, Feature};
 pub use error::{EvalError, ParseError};
+pub use typ::Type;
 pub use value::Value;
 
 /// Parse a MapLibre expression from its JSON representation.
 pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
     parse::parse(json)
+}
+
+/// Statically type-check a parsed expression, optionally against the type a
+/// property expects. Returns a [`ParseError`] for expressions the reference
+/// implementation rejects at compile time (bad comparisons, malformed `match`
+/// branches, non-interpolatable outputs, misused `zoom`, and so on).
+pub fn typecheck(expr: &Expr, expected: Option<&Type>) -> Result<(), ParseError> {
+    typecheck::typecheck(expr, expected)
 }
 
 /// Evaluate a parsed expression against an evaluation context.
