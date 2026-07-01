@@ -3,9 +3,9 @@
 A pure-Rust parser and evaluator for [MapLibre GL style expressions][spec].
 
 It turns a MapLibre expression (JSON such as `["*", ["get", "x"], 2]`) into a
-typed tree with `parse`, then evaluates that tree against an
-`EvaluationContext` (zoom + feature) with `evaluate`. No rendering, no I/O —
-just the expression language.
+typed tree with `parse`, optionally validates it with `typecheck`, then
+evaluates that tree against an `EvaluationContext` (zoom + feature) with
+`evaluate`. No rendering, no I/O — just the expression language.
 
 ```rust
 use maplibre_expr::{parse, evaluate, EvaluationContext, Feature, Value};
@@ -32,7 +32,26 @@ assert_eq!(evaluate(&expr, &ctx).unwrap(), Value::Number(42.0));
 | `context.rs`  | `EvaluationContext` (zoom + `Feature`)                      |
 | `ast.rs`      | `Expr` — the parsed tree; special forms for let/match/step/interpolate |
 | `parse.rs`    | JSON → `Expr`, with operator/arity validation               |
+| `typ.rs`      | `Type` and the subtyping relation                           |
+| `typecheck.rs`| Static type inference & validation (compile-time errors)    |
 | `eval.rs`     | Evaluating an `Expr` against a context                       |
+
+## Type checking
+
+`typecheck(&expr, expected)` runs a static pass that mirrors the compile-time
+validation MapLibre performs while parsing: it infers each node's result type,
+checks operator argument types, and reconciles against an optional expected
+type (assert/coerce/subtype). It rejects, for example, comparisons between
+incompatible types, malformed `match` branches, non-interpolatable
+`interpolate` outputs, bad `array` item-type/length arguments, and misuse of
+`zoom` outside a single top-level curve.
+
+**Error messages are not reproduced (yet).** The pass detects the *same error
+conditions* as the reference implementation — logically, the same expressions
+are rejected — but the returned `ParseError` text is our own and does not match
+MapLibre's wording. Message-for-message parity is future work; today the
+conformance suite only checks *whether* an expression compiles, not the error
+string.
 
 ## Conformance testing
 
@@ -44,20 +63,21 @@ run reads like:
 
 ```
 cargo test --test spec
-# test result: ok. 286 passed; 0 failed; 277 ignored; ...
+# test result: ok. 386 passed; 0 failed; 177 ignored; ...
 ```
 
-For every fixture it parses the `expression` (checking success vs. compile
-error), then evaluates it against each `input` and compares to the expected
-`output`, matching `{ "error": ... }` outputs against evaluation errors.
-Numbers are compared with the same 6-significant-figure `stripPrecision` rule
-the upstream suite uses; colors are compared premultiplied, matching
+For every fixture it compiles the `expression` (`parse` + `typecheck`, with the
+expected type taken from the fixture's `propertySpec`), checking success vs.
+compile error, then evaluates it against each `input` and compares to the
+expected `output`, matching `{ "error": ... }` outputs against evaluation
+errors. Numbers are compared with the same 6-significant-figure `stripPrecision`
+rule the upstream suite uses; colors are compared premultiplied, matching
 MapLibre's internal `Color`.
 
 **Scope note:** the harness verifies `compiled.result` (success/error) and the
-per-input `outputs`. It does not yet assert the static-analysis fields
-(`type`, `isFeatureConstant`, `isZoomConstant`) — a type-inference pass is
-future work.
+per-input `outputs`. It does **not** compare compile-error *messages* (only that
+an error is raised — see [Type checking](#type-checking)), nor assert the other
+static-analysis fields (`type`, `isFeatureConstant`, `isZoomConstant`).
 
 ### The skip-list is the roadmap
 
