@@ -762,11 +762,11 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         Expr::Format(sections) => {
             for s in sections {
                 out.push(&s.content);
-                for opt in [&s.scale, &s.font, &s.text_color, &s.vertical_align] {
-                    if let Some(e) = opt {
-                        out.push(e);
-                    }
-                }
+                out.extend(
+                    [&s.scale, &s.font, &s.text_color, &s.vertical_align]
+                        .into_iter()
+                        .flatten(),
+                );
             }
         }
         Expr::Let { bindings, body } => {
