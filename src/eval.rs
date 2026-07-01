@@ -53,6 +53,18 @@ impl Evaluator<'_> {
             } => self.eval_interpolate(*kind, *space, input, stops),
             Expr::Call { op, args } => self.eval_call(op, args),
             Expr::Format(sections) => self.eval_format(sections),
+            Expr::Within(polygons) => {
+                let inside = match (
+                    self.ctx.canonical,
+                    self.ctx.feature.geometry_type.as_deref(),
+                ) {
+                    (Some(canon), Some(gt)) if !self.ctx.feature.geometry.is_empty() => {
+                        crate::geometry::within(&self.ctx.feature.geometry, gt, canon, polygons)
+                    }
+                    _ => false,
+                };
+                Ok(Value::Bool(inside))
+            }
             Expr::Assert(ty, inner) => {
                 let v = self.eval(inner)?;
                 assert_value(ty, v)

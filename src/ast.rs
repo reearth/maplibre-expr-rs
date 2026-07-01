@@ -42,6 +42,9 @@ pub enum Expr {
     },
     /// `["format", content, options?, ...]` — styled text sections.
     Format(Vec<FormatArg>),
+    /// `["within", geojson]` — the argument polygons as `[lng, lat]` rings
+    /// (a multipolygon: list of polygons, each a list of rings).
+    Within(Vec<Vec<Vec<(f64, f64)>>>),
     /// A runtime type assertion inserted by type checking: the inner expression
     /// must already produce the given type at runtime, or evaluation errors.
     Assert(Type, Box<Expr>),

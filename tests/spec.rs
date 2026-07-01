@@ -571,6 +571,12 @@ fn build_context(input: &Json) -> Result<EvaluationContext, Failed> {
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
     }
+    if let Some(c) = items.first().and_then(|g| g.get("canonicalID")) {
+        let n = |k| c.get(k).and_then(Json::as_u64).map(|v| v as u32);
+        if let (Some(z), Some(x), Some(y)) = (n("z"), n("x"), n("y")) {
+            ctx.canonical = Some((z, x, y));
+        }
+    }
 
     if let Some(feature_json) = items.get(1) {
         ctx.feature = build_feature(feature_json);
@@ -599,16 +605,28 @@ fn build_feature(json: &Json) -> Feature {
             .collect::<BTreeMap<_, _>>();
     }
     feature.geometry_type = geometry_type(json);
+    if let Some(geom) = json.get("geometry") {
+        feature.geometry = extract_geometry(geom);
+    }
     feature
 }
 
 fn geometry_type(json: &Json) -> Option<String> {
+    // Normalize to the vector-tile geometry class (Point/LineString/Polygon).
     if let Some(t) = json
         .get("geometry")
         .and_then(|g| g.get("type"))
         .and_then(Json::as_str)
     {
-        return Some(t.to_string());
+        return Some(
+            match t {
+                "Point" | "MultiPoint" => "Point",
+                "LineString" | "MultiLineString" => "LineString",
+                "Polygon" | "MultiPolygon" => "Polygon",
+                other => other,
+            }
+            .to_string(),
+        );
     }
     match json.get("type") {
         Some(Json::String(s)) => Some(s.clone()),
@@ -619,6 +637,47 @@ fn geometry_type(json: &Json) -> Option<String> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// Extract the feature geometry as raw `[lng, lat]` groups (rings / lines).
+fn extract_geometry(geom: &Json) -> Vec<Vec<(f64, f64)>> {
+    let pt = |c: &Json| -> Option<(f64, f64)> {
+        let a = c.as_array()?;
+        Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+    };
+    let line = |c: &Json| -> Vec<(f64, f64)> {
+        c.as_array()
+            .map(|a| a.iter().filter_map(pt).collect())
+            .unwrap_or_default()
+    };
+    let coords = geom.get("coordinates");
+    match geom.get("type").and_then(Json::as_str) {
+        Some("Point") => coords
+            .and_then(pt)
+            .map(|p| vec![vec![p]])
+            .unwrap_or_default(),
+        Some("MultiPoint") => coords
+            .and_then(Json::as_array)
+            .map(|a| a.iter().filter_map(pt).map(|p| vec![p]).collect())
+            .unwrap_or_default(),
+        Some("LineString") => coords.map(|c| vec![line(c)]).unwrap_or_default(),
+        Some("MultiLineString") | Some("Polygon") => coords
+            .and_then(Json::as_array)
+            .map(|a| a.iter().map(line).collect())
+            .unwrap_or_default(),
+        Some("MultiPolygon") => coords
+            .and_then(Json::as_array)
+            .map(|polys| {
+                polys
+                    .iter()
+                    .filter_map(Json::as_array)
+                    .flatten()
+                    .map(line)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
     }
 }
 

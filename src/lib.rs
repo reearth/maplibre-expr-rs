@@ -32,6 +32,7 @@ mod color;
 mod context;
 mod error;
 mod eval;
+mod geometry;
 mod parse;
 mod typ;
 mod typecheck;

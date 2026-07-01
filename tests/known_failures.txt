@@ -1,8 +1,8 @@
 # Fixtures not yet passing, reported as `ignored` by the spec harness. Grouped
 # by reason so it doubles as a roadmap. Nothing is skipped silently.
 
-# === Operators not yet implemented (distance/within geometry, collator/
-# number-format/resolved-locale locale builtins, is-supported-script).  (84 fixtures) ===
+# === Operators not yet implemented (distance geometry, collator/number-format/
+# resolved-locale locale builtins, is-supported-script).  (63 fixtures) ===
 collator/accent-equals-de
 collator/accent-lt-en
 collator/accent-not-equals-en
@@ -66,27 +66,6 @@ number-format/default
 number-format/precision
 number-format/unit
 resolved-locale/basic
-within/expression-geojson
-within/line-within-collection-of-multipolygons
-within/line-within-collection-of-polygons
-within/line-within-polygon
-within/line-within-polygons
-within/lines-within-polygon
-within/lines-within-polygons
-within/meridian-issue-line-1
-within/meridian-issue-line-2
-within/meridian-issue-point-1
-within/meridian-issue-point-2
-within/non-supported
-within/point-on-boundary-1
-within/point-on-boundary-2
-within/point-on-boundary-3
-within/point-within-collection-of-multipolygons
-within/point-within-collection-of-polygons
-within/point-within-polygon
-within/point-within-polygons
-within/points-within-polygon
-within/points-within-polygons
 
 # === interpolate-hcl / interpolate-lab: remaining need the typed ColorArray value.  (2 fixtures) ===
 interpolate-hcl/linear-color-array

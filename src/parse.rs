@@ -50,6 +50,7 @@ fn parse_array(items: &[Json]) -> Result<Expr> {
         "interpolate-hcl" => parse_interpolate(InterpSpace::Hcl, args),
         "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args),
         "format" => parse_format(args),
+        "within" => parse_within(args),
         "array" => {
             check_generic_arity(op, args.len())?;
             validate_array_type_args(args)?;
@@ -280,6 +281,85 @@ fn parse_interpolate(space: InterpSpace, args: &[Json]) -> Result<Expr> {
         input: Box::new(input),
         stops,
     })
+}
+
+/// Parse `["within", geojson]`, extracting polygon rings (as `[lng, lat]`)
+/// from a Polygon, MultiPolygon, Feature, or FeatureCollection.
+fn parse_within(args: &[Json]) -> Result<Expr> {
+    let err = || {
+        ParseError::new(
+            "'within' expression requires valid geojson object that contains polygon geometry type.",
+        )
+    };
+    if args.len() != 1 {
+        return Err(ParseError::new(
+            "'within' expression requires exactly one argument.",
+        ));
+    }
+    let geojson = &args[0];
+    let mut polygons: Vec<Vec<Vec<(f64, f64)>>> = Vec::new();
+    let mut add_geometry =
+        |ty: Option<&str>, coords: Option<&Json>| match (ty, coords.and_then(Json::as_array)) {
+            (Some("Polygon"), Some(c)) => {
+                if let Some(p) = parse_polygon(c) {
+                    polygons.push(p);
+                }
+            }
+            (Some("MultiPolygon"), Some(c)) => {
+                for poly in c.iter().filter_map(Json::as_array) {
+                    if let Some(p) = parse_polygon(poly) {
+                        polygons.push(p);
+                    }
+                }
+            }
+            _ => {}
+        };
+    match geojson.get("type").and_then(Json::as_str) {
+        Some("FeatureCollection") => {
+            for feat in geojson
+                .get("features")
+                .and_then(Json::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let g = feat.get("geometry");
+                add_geometry(
+                    g.and_then(|g| g.get("type")).and_then(Json::as_str),
+                    g.and_then(|g| g.get("coordinates")),
+                );
+            }
+        }
+        Some("Feature") => {
+            let g = geojson.get("geometry");
+            add_geometry(
+                g.and_then(|g| g.get("type")).and_then(Json::as_str),
+                g.and_then(|g| g.get("coordinates")),
+            );
+        }
+        Some(t @ ("Polygon" | "MultiPolygon")) => {
+            add_geometry(Some(t), geojson.get("coordinates"));
+        }
+        _ => {}
+    }
+    if polygons.is_empty() {
+        return Err(err());
+    }
+    Ok(Expr::Within(polygons))
+}
+
+/// Parse a GeoJSON polygon (array of rings of `[lng, lat]`).
+fn parse_polygon(rings: &[Json]) -> Option<Vec<Vec<(f64, f64)>>> {
+    let mut out = Vec::new();
+    for ring in rings.iter().filter_map(Json::as_array) {
+        let mut r = Vec::new();
+        for pt in ring.iter().filter_map(Json::as_array) {
+            let lng = pt.first().and_then(Json::as_f64)?;
+            let lat = pt.get(1).and_then(Json::as_f64)?;
+            r.push((lng, lat));
+        }
+        out.push(r);
+    }
+    Some(out)
 }
 
 fn parse_format(args: &[Json]) -> Result<Expr> {
