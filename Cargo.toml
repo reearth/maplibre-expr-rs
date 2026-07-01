@@ -1,0 +1,29 @@
+[package]
+name = "maplibre-expr"
+description = "Pure-Rust parser and evaluator for MapLibre GL style expressions"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/reearth/maplibre-expr-rs"
+homepage = "https://github.com/reearth/maplibre-expr-rs"
+authors = ["Re:Earth and contributors"]
+keywords = ["maplibre", "mapbox", "expression", "style", "gis"]
+categories = ["parsing", "graphics"]
+readme = "README.md"
+exclude = ["/.github"]
+
+[lib]
+name = "maplibre_expr"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+libtest-mimic = "0.8"
+
+[[test]]
+name = "spec"
+harness = false
