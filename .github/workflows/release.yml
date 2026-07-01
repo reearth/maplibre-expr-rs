@@ -1,0 +1,74 @@
+name: Release (crates.io)
+
+on:
+  push:
+    tags:
+      # e.g. v0.1.0
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (do not actually publish)"
+        required: false
+        type: boolean
+        default: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    # Trusted Publishing (https://crates.io/docs/trusted-publishing) — no
+    # long-lived CARGO_REGISTRY_TOKEN secret needed. The `crates-io`
+    # environment gates this job behind a manual approval.
+    environment: crates-io
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 (stable)
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Resolve dry-run flag
+        id: cfg
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DRY_RUN="${{ inputs.dry_run }}"
+          else
+            DRY_RUN="false"
+          fi
+          echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "Resolved: dry_run=$DRY_RUN"
+
+      - name: Verify tag matches Cargo.toml version
+        if: github.event_name == 'push'
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          CRATE_VERSION="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          if [ "$TAG" != "$CRATE_VERSION" ]; then
+            echo "::error::Tag v$TAG does not match Cargo.toml version $CRATE_VERSION"
+            exit 1
+          fi
+          echo "Tag v$TAG matches Cargo.toml version $CRATE_VERSION"
+
+      - name: cargo publish --dry-run
+        run: cargo publish --dry-run
+
+      - name: Authenticate to crates.io (Trusted Publishing / OIDC)
+        if: steps.cfg.outputs.dry_run != 'true'
+        id: auth
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
+
+      - name: cargo publish
+        if: steps.cfg.outputs.dry_run != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish
