@@ -1,5 +1,8 @@
 # maplibre-expr
 
+[![crates.io](https://img.shields.io/crates/v/maplibre-expr.svg)](https://crates.io/crates/maplibre-expr)
+[![docs.rs](https://img.shields.io/docsrs/maplibre-expr)](https://docs.rs/maplibre-expr)
+
 A pure-Rust parser and evaluator for [MapLibre GL style expressions][spec] that
 aims to behave **exactly** like the reference implementation — not just the same
 results, but the same compile errors, in the same places.
@@ -41,19 +44,6 @@ let ctx = EvaluationContext::new().with_feature(Feature {
 
 assert_eq!(evaluate(&expr, &ctx).unwrap(), Value::Number(42.0));
 ```
-
-## Layout
-
-| Module        | Responsibility                                              |
-| ------------- | ----------------------------------------------------------- |
-| `value.rs`    | `Value` — the expression type system (+ number formatting)  |
-| `color.rs`    | `Color` and a CSS color parser (hex, `rgb()/hsl()`, named)  |
-| `context.rs`  | `EvaluationContext` (zoom + `Feature`)                      |
-| `ast.rs`      | `Expr` — the parsed tree; special forms for let/match/step/interpolate |
-| `parse.rs`    | JSON → `Expr`, with operator/arity validation               |
-| `typ.rs`      | `Type` and the subtyping relation                           |
-| `typecheck.rs`| Static type inference & validation (compile-time errors)    |
-| `eval.rs`     | Evaluating an `Expr` against a context                       |
 
 ## Type checking
 
@@ -114,6 +104,25 @@ let out = evaluate_with(&expr, &EvaluationContext::new(), &opts).unwrap();
 assert_eq!(out, Value::Number(21.0)); // sum(6)
 ```
 
+A **native function** is just a Rust `fn`/closure — it receives the already
+evaluated arguments plus the context, so it can compute anything:
+
+```rust
+use maplibre_expr::{parse_with, evaluate_with, EvaluationContext, Options, Value};
+use serde_json::json;
+
+let mut opts = Options::new();
+opts.native("hypot", 2, |args, _ctx| {
+    let x = args[0].as_number().unwrap_or(0.0);
+    let y = args[1].as_number().unwrap_or(0.0);
+    Ok(Value::Number(x.hypot(y)))
+});
+
+let expr = parse_with(&json!(["hypot", 3, 4]), &opts).unwrap();
+let out = evaluate_with(&expr, &EvaluationContext::new(), &opts).unwrap();
+assert_eq!(out, Value::Number(5.0));
+```
+
 These are parser/runtime *options*, not a new dialect — a tree without any
 custom operators parses and evaluates identically with or without them.
 
@@ -167,21 +176,7 @@ instead of the pass/fail run.
 per-input `outputs`, and error message/key parity. It does **not** assert the
 other static-analysis fields (`type`, `isFeatureConstant`, `isZoomConstant`).
 
-### The skip-list
-
-`tests/known_failures.txt` lists any fixtures to report as **ignored** rather
-than failing the build; it is currently empty (the whole suite passes). It is
-the running to-do list should the vendored fixtures be refreshed to a newer
-spec — add a failing fixture's name to keep the build green while you catch up.
-
-To make progress: implement a behaviour, delete the corresponding line(s) from
-`known_failures.txt`, and the fixtures graduate to enforced tests.
-
-### Refreshing the fixtures
-
-```sh
-tests/refresh_fixtures.sh [git-ref]   # re-vendors and prints the new commit
-```
+Refresh the vendored snapshot with `tests/refresh_fixtures.sh [git-ref]`.
 
 ## License
 
