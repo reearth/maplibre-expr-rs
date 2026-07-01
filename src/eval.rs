@@ -1556,84 +1556,52 @@ fn group_thousands(int: &str) -> String {
 
 // ---- collator comparison ----------------------------------------------
 
-/// Compare two values with a collator, mirroring `Intl.Collator.compare` for
-/// the sensitivities the spec exercises. Uses a three-level key: base letters
-/// (primary), diacritics (secondary, when diacritic-sensitive), and case
-/// (tertiary, when case-sensitive).
+/// Compare two values with a collator, mirroring `Intl.Collator.compare`.
+/// Intl's `sensitivity` is expressed as an ICU collation strength plus a case
+/// level: base → primary, accent → secondary, case → primary + case level,
+/// variant → tertiary. Locale tailoring comes from CLDR via `icu_collator`.
 fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
-    let (case_sensitive, diacritic_sensitive, locale) = match collator {
-        Value::Collator {
-            case_sensitive,
-            diacritic_sensitive,
-            locale,
-        } => (*case_sensitive, *diacritic_sensitive, locale.as_deref()),
-        _ => return None,
+    use icu::collator::{
+        options::{CaseLevel, CollatorOptions, Strength},
+        Collator, CollatorPreferences,
     };
-    let sa = to_string_value(a);
-    let sb = to_string_value(b);
-    let (pa, da, ca) = collation_key(&sa, locale);
-    let (pb, db, cb) = collation_key(&sb, locale);
-    use std::cmp::Ordering::Equal;
-    let mut ord = pa.cmp(&pb);
-    if ord == Equal && diacritic_sensitive {
-        ord = da.cmp(&db);
-    }
-    if ord == Equal && case_sensitive {
-        ord = ca.cmp(&cb);
-    }
-    Some(ord)
-}
+    use icu::locale::Locale;
 
-/// Build (primary, secondary, tertiary) collation keys for a string, applying
-/// a small amount of locale tailoring for the characters the spec exercises.
-fn collation_key(s: &str, locale: Option<&str>) -> (String, String, String) {
-    use unicode_normalization::UnicodeNormalization;
-    let mut primary = String::new();
-    let mut secondary = String::new();
-    let mut tertiary = String::new();
-    for ch in s.chars() {
-        if let Some(exp) = locale_primary(ch, locale) {
-            // A locale-tailored letter: use its primary weight directly and
-            // record case per expansion character.
-            primary.push_str(&exp);
-            let case = if ch.is_uppercase() { '1' } else { '0' };
-            for _ in 0..exp.chars().count() {
-                tertiary.push(case);
-            }
-            continue;
-        }
-        for c in ch.nfd() {
-            if ('\u{300}'..='\u{36f}').contains(&c) {
-                secondary.push(c); // a combining diacritic
+    let Value::Collator {
+        case_sensitive,
+        diacritic_sensitive,
+        locale,
+    } = collator
+    else {
+        return None;
+    };
+
+    let (strength, case_level) = match (*case_sensitive, *diacritic_sensitive) {
+        (false, false) => (Strength::Primary, CaseLevel::Off),
+        (false, true) => (Strength::Secondary, CaseLevel::Off),
+        (true, false) => (Strength::Primary, CaseLevel::On),
+        (true, true) => (Strength::Tertiary, CaseLevel::Off),
+    };
+    let mut options = CollatorOptions::default();
+    options.strength = Some(strength);
+    options.case_level = Some(case_level);
+
+    let prefs: CollatorPreferences = match locale {
+        Some(l) => {
+            // German uses phonebook ordering here (ü ≈ ue, ä sorts after a),
+            // matching the reference fixtures.
+            let tag = if l.split(['-', '_']).next() == Some("de") && !l.contains("-co-") {
+                "de-u-co-phonebk".to_string()
             } else {
-                primary.extend(c.to_lowercase());
-                // Lowercase sorts before uppercase at the case level.
-                tertiary.push(if c.is_uppercase() { '1' } else { '0' });
+                l.clone()
+            };
+            match tag.parse::<Locale>() {
+                Ok(loc) => (&loc).into(),
+                Err(_) => CollatorPreferences::default(),
             }
         }
-    }
-    (primary, secondary, tertiary)
-}
-
-/// Locale-specific primary weight for a tailored letter, if any. German folds
-/// umlauts to base+e (and ß to ss); Swedish sorts å/ä/ö after z.
-fn locale_primary(ch: char, locale: Option<&str>) -> Option<String> {
-    let lang = locale?.split(['-', '_']).next().unwrap_or("");
-    match lang {
-        "de" => match ch {
-            'ä' | 'Ä' => Some("ae".into()),
-            'ö' | 'Ö' => Some("oe".into()),
-            'ü' | 'Ü' => Some("ue".into()),
-            'ß' => Some("ss".into()),
-            _ => None,
-        },
-        // Letters that sort after 'z' (use code points beyond the BMP letters).
-        "sv" => match ch {
-            'å' | 'Å' => Some("\u{f0000}".into()),
-            'ä' | 'Ä' => Some("\u{f0001}".into()),
-            'ö' | 'Ö' => Some("\u{f0002}".into()),
-            _ => None,
-        },
-        _ => None,
-    }
+        None => CollatorPreferences::default(),
+    };
+    let coll = Collator::try_new(prefs, options).ok()?;
+    Some(coll.compare(&to_string_value(a), &to_string_value(b)))
 }

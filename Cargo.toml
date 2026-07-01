@@ -20,7 +20,7 @@ name = "maplibre_expr"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-unicode-normalization = "0.1"
+icu = { version = "2", features = ["compiled_data"] }
 
 [dev-dependencies]
 libtest-mimic = "0.8"

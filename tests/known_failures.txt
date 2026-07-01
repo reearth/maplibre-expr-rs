@@ -1,2 +1,1 @@
-# All 563 vendored expression fixtures currently pass. This file is the
-# running to-do list; keep it empty while the suite is fully green.
+# All 563 vendored expression fixtures currently pass; keep empty while green.

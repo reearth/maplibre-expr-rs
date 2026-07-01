@@ -54,6 +54,23 @@ MapLibre's wording. Message-for-message parity is future work; today the
 conformance suite only checks *whether* an expression compiles, not the error
 string.
 
+## Implementation notes
+
+- **`distance` uses a brute-force pairwise scan** rather than MapLibre's
+  bounding-volume hierarchy. The minimum distance is independent of traversal
+  order, so the result is identical; the trade-off is scalability — this is
+  `O(n·m)` in the vertex counts, where MapLibre's BVH prunes distant pairs.
+  For tile-sized geometry the difference is negligible, and the code is far
+  simpler. (If you need large-geometry performance, this is the place to add a
+  spatial index.)
+- Feature coordinates are round-tripped through tile coordinates before
+  `distance`/`within`, matching MapLibre's quantization so results agree.
+- **`collator` uses CLDR collation via [`icu_collator`]** (pure Rust), so
+  locale-aware ordering works for any locale — Intl's `sensitivity` maps to an
+  ICU strength plus case level.
+
+[`icu_collator`]: https://crates.io/crates/icu_collator
+
 ## Conformance testing
 
 The crate is validated against a **vendored snapshot** of the upstream
