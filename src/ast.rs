@@ -50,6 +50,15 @@ pub enum Expr {
     Within(Vec<Vec<Vec<(f64, f64)>>>),
     /// `["distance", geojson]` — the argument geometries in `[lng, lat]`.
     Distance(Vec<crate::distance::SimpleGeom>),
+    /// `["number-format", value, options]`.
+    NumberFormat {
+        value: Box<Expr>,
+        locale: Option<Box<Expr>>,
+        currency: Option<Box<Expr>>,
+        min_fraction_digits: Option<Box<Expr>>,
+        max_fraction_digits: Option<Box<Expr>>,
+        unit: Option<Box<Expr>>,
+    },
     /// A runtime type assertion inserted by type checking: the inner expression
     /// must already produce the given type at runtime, or evaluation errors.
     Assert(Type, Box<Expr>),

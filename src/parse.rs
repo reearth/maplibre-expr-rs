@@ -51,6 +51,7 @@ fn parse_array(items: &[Json]) -> Result<Expr> {
         "interpolate-hcl" => parse_interpolate(InterpSpace::Hcl, args),
         "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args),
         "format" => parse_format(args),
+        "number-format" => parse_number_format(args),
         "within" => parse_within(args),
         "distance" => parse_distance(args),
         "array" => {
@@ -288,6 +289,37 @@ fn parse_interpolate(space: InterpSpace, args: &[Json]) -> Result<Expr> {
 
 /// Parse `["within", geojson]`, extracting polygon rings (as `[lng, lat]`)
 /// from a Polygon, MultiPolygon, Feature, or FeatureCollection.
+fn parse_number_format(args: &[Json]) -> Result<Expr> {
+    if args.len() != 2 {
+        return Err(ParseError::new(
+            "Expected two arguments to 'number-format'.",
+        ));
+    }
+    let value = Box::new(parse(&args[0])?);
+    let opts = args[1]
+        .as_object()
+        .ok_or_else(|| ParseError::new("'number-format' options must be an object."))?;
+    if opts.contains_key("currency") && opts.contains_key("unit") {
+        return Err(ParseError::new(
+            "Cannot use both 'currency' and 'unit' in 'number-format'.",
+        ));
+    }
+    let opt = |key: &str| -> Result<Option<Box<Expr>>> {
+        match opts.get(key) {
+            Some(v) => Ok(Some(Box::new(parse(v)?))),
+            None => Ok(None),
+        }
+    };
+    Ok(Expr::NumberFormat {
+        value,
+        locale: opt("locale")?,
+        currency: opt("currency")?,
+        min_fraction_digits: opt("min-fraction-digits")?,
+        max_fraction_digits: opt("max-fraction-digits")?,
+        unit: opt("unit")?,
+    })
+}
+
 fn parse_within(args: &[Json]) -> Result<Expr> {
     let err = || {
         ParseError::new(

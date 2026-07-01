@@ -1,4 +1,4 @@
-# Not-yet-passing fixtures (locale builtins + a couple of edge cases).
+# Not-yet-passing fixtures: collator (locale-aware comparison) + a few edge cases.
 collator/accent-equals-de                                
 collator/accent-lt-en                                    
 collator/accent-not-equals-en                            
@@ -18,9 +18,5 @@ collator/variant-gteq-en
 constant-folding/evaluation-error                        
 equal/collator-value                                     
 get/from-literal--missing                                
-number-format/currency                                   
-number-format/default                                    
-number-format/precision                                  
-number-format/unit                                       
 resolved-locale/basic                                    
-test result: FAILED. 539 passed; 24 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: FAILED. 543 passed; 20 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s

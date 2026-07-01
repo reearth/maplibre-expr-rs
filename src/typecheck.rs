@@ -89,6 +89,34 @@ impl Checker {
             Expr::Format(sections) => self.infer_format(sections),
             Expr::Within(polygons) => Ok((Expr::Within(polygons.clone()), Type::Boolean)),
             Expr::Distance(geoms) => Ok((Expr::Distance(geoms.clone()), Type::Number)),
+            Expr::NumberFormat {
+                value,
+                locale,
+                currency,
+                min_fraction_digits,
+                max_fraction_digits,
+                unit,
+            } => {
+                let (value, _) = self.infer(value, Some(&Type::Number))?;
+                let mut opt =
+                    |e: &Option<Box<Expr>>, ty: Type| -> Result<Option<Box<Expr>>, ParseError> {
+                        match e {
+                            Some(e) => Ok(Some(Box::new(self.infer(e, Some(&ty))?.0))),
+                            None => Ok(None),
+                        }
+                    };
+                Ok((
+                    Expr::NumberFormat {
+                        value: Box::new(value),
+                        locale: opt(locale, Type::String)?,
+                        currency: opt(currency, Type::String)?,
+                        min_fraction_digits: opt(min_fraction_digits, Type::Number)?,
+                        max_fraction_digits: opt(max_fraction_digits, Type::Number)?,
+                        unit: opt(unit, Type::String)?,
+                    },
+                    Type::String,
+                ))
+            }
             // Annotations only appear in already-checked trees.
             Expr::Assert(t, inner) | Expr::Coerce(t, inner) => {
                 let (e, _) = self.infer(inner, None)?;
@@ -842,6 +870,28 @@ fn children(expr: &Expr) -> Vec<&Expr> {
                         .flatten(),
                 );
             }
+        }
+        Expr::NumberFormat {
+            value,
+            locale,
+            currency,
+            min_fraction_digits,
+            max_fraction_digits,
+            unit,
+        } => {
+            out.push(value);
+            out.extend(
+                [
+                    locale,
+                    currency,
+                    min_fraction_digits,
+                    max_fraction_digits,
+                    unit,
+                ]
+                .into_iter()
+                .flatten()
+                .map(|b| b.as_ref()),
+            );
         }
         Expr::Let { bindings, body } => {
             for (_, v) in bindings {

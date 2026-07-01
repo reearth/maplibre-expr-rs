@@ -78,6 +78,27 @@ impl Evaluator<'_> {
                 };
                 Ok(Value::Number(d))
             }
+            Expr::NumberFormat {
+                value,
+                currency,
+                min_fraction_digits,
+                max_fraction_digits,
+                unit,
+                ..
+            } => {
+                let n = self.eval_number(value)?;
+                let currency = self.eval_opt_string(currency)?;
+                let unit = self.eval_opt_string(unit)?;
+                let min_frac = self.eval_opt_number(min_fraction_digits)?;
+                let max_frac = self.eval_opt_number(max_fraction_digits)?;
+                Ok(Value::String(format_number_intl(
+                    n,
+                    currency.as_deref(),
+                    unit.as_deref(),
+                    min_frac.map(|v| v as usize),
+                    max_frac.map(|v| v as usize),
+                )))
+            }
             Expr::Assert(ty, inner) => {
                 let v = self.eval(inner)?;
                 assert_value(ty, v)
@@ -623,6 +644,20 @@ impl Evaluator<'_> {
         match self.eval(expr)? {
             Value::String(s) => Ok(s),
             other => Err(type_error("string", &other)),
+        }
+    }
+
+    fn eval_opt_string(&mut self, expr: &Option<Box<Expr>>) -> Result<Option<String>> {
+        match expr {
+            Some(e) => Ok(Some(self.eval_string(e)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn eval_opt_number(&mut self, expr: &Option<Box<Expr>>) -> Result<Option<f64>> {
+        match expr {
+            Some(e) => Ok(Some(self.eval_number(e)?)),
+            None => Ok(None),
         }
     }
 
@@ -1338,4 +1373,138 @@ fn unit_bezier(x1: f64, y1: f64, x2: f64, y2: f64, x: f64) -> f64 {
         t = (hi - lo) * 0.5 + lo;
     }
     sample_y(t)
+}
+
+// ---- number-format (en-US) --------------------------------------------
+
+fn currency_digits(code: &str) -> usize {
+    // Currencies with zero fractional digits; everything else uses two.
+    match code {
+        "JPY" | "KRW" | "CLP" | "VND" | "ISK" | "HUF" => 0,
+        _ => 2,
+    }
+}
+
+fn currency_symbol(code: &str) -> String {
+    match code {
+        "USD" => "$".into(),
+        "EUR" => "€".into(),
+        "JPY" | "CNY" => "¥".into(),
+        "GBP" => "£".into(),
+        "KRW" => "₩".into(),
+        other => format!("{other}\u{a0}"),
+    }
+}
+
+fn unit_suffix(unit: &str) -> String {
+    match unit {
+        "celsius" => "°C".into(),
+        "meter" => " m".into(),
+        "kilometer" => " km".into(),
+        "centimeter" => " cm".into(),
+        "millimeter" => " mm".into(),
+        "kilobyte" => " kB".into(),
+        "megabyte" => " MB".into(),
+        "byte" => " byte".into(),
+        "percent" => "%".into(),
+        other => format!(" {other}"),
+    }
+}
+
+/// Format a number the way `Intl.NumberFormat('en-US', ...)` does for the
+/// options exercised by the spec fixtures.
+fn format_number_intl(
+    n: f64,
+    currency: Option<&str>,
+    unit: Option<&str>,
+    min_frac: Option<usize>,
+    max_frac: Option<usize>,
+) -> String {
+    let (def_min, def_max) = match currency {
+        Some(code) => {
+            let d = currency_digits(code);
+            (d, d)
+        }
+        None => (0, 3),
+    };
+    let min = min_frac.unwrap_or(def_min);
+    let max = max_frac.unwrap_or(def_max).max(min);
+    let body = format_decimal_us(n, min, max);
+    if let Some(code) = currency {
+        return format!("{}{}", currency_symbol(code), body);
+    }
+    if let Some(u) = unit {
+        return format!("{}{}", body, unit_suffix(u));
+    }
+    body
+}
+
+fn format_decimal_us(n: f64, min: usize, max: usize) -> String {
+    let neg = n < 0.0;
+    // The shortest round-trip decimal, matching JavaScript's Number->String.
+    let s = format!("{}", n.abs());
+    let (int_part, frac_part) = match s.split_once('.') {
+        Some((i, f)) => (i.to_string(), f.to_string()),
+        None => (s, String::new()),
+    };
+    let (int_r, frac_r) = round_decimal(&int_part, &frac_part, max);
+    let mut frac = frac_r;
+    while frac.len() < min {
+        frac.push('0');
+    }
+    while frac.len() > min && frac.ends_with('0') {
+        frac.pop();
+    }
+    let mut out = String::new();
+    if neg {
+        out.push('-');
+    }
+    out.push_str(&group_thousands(&int_r));
+    if !frac.is_empty() {
+        out.push('.');
+        out.push_str(&frac);
+    }
+    out
+}
+
+/// Round a decimal `int.frac` to `max` fraction digits (half-up), returning the
+/// new integer and fraction parts.
+fn round_decimal(int: &str, frac: &str, max: usize) -> (String, String) {
+    if frac.len() <= max {
+        return (int.to_string(), frac.to_string());
+    }
+    let round_up = frac.as_bytes()[max] >= b'5';
+    let mut digits: Vec<u8> = format!("{int}{}", &frac[..max]).into_bytes();
+    if round_up {
+        let mut i = digits.len();
+        loop {
+            if i == 0 {
+                digits.insert(0, b'1');
+                break;
+            }
+            i -= 1;
+            if digits[i] == b'9' {
+                digits[i] = b'0';
+            } else {
+                digits[i] += 1;
+                break;
+            }
+        }
+    }
+    let s = String::from_utf8(digits).unwrap();
+    let split = s.len() - max;
+    (s[..split].to_string(), s[split..].to_string())
+}
+
+fn group_thousands(int: &str) -> String {
+    let bytes = int.as_bytes();
+    let mut out = String::new();
+    let n = bytes.len();
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (n - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
 }
