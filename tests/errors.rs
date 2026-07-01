@@ -34,7 +34,10 @@ fn nested_error_carries_location_key() {
 #[test]
 fn comparison_kinds() {
     // "==" of two colors is not comparable.
-    let e = compile_err(json!(["==", ["to-color", "red"], ["to-color", "blue"]]), None);
+    let e = compile_err(
+        json!(["==", ["to-color", "red"], ["to-color", "blue"]]),
+        None,
+    );
     assert!(matches!(e.kind, ParseErrorKind::NotComparable { .. }));
 
     // string vs number: cannot compare.
