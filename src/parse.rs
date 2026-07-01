@@ -167,12 +167,6 @@ fn expand_macro(op: &str, args: &[Json], opts: &Options) -> Result<Expr> {
     result
 }
 
-/// Reject unknown operators and calls with the wrong number of arguments at
-/// parse time — these are `"result": "error"` cases in the spec fixtures.
-///
-/// Operators that MapLibre defines but this crate does not yet evaluate are
-/// still accepted here (so their arguments parse); evaluation reports them as
-/// unimplemented. Only genuinely unknown names are rejected.
 /// JavaScript's `typeof` for a JSON value: arrays, objects and `null` all
 /// report as `"object"`.
 fn js_typeof(v: &Json) -> &'static str {
@@ -205,6 +199,12 @@ fn signature_arity_error(op: &str, args: &[Json]) -> Option<ParseError> {
     }))
 }
 
+/// Reject unknown operators and calls with the wrong number of arguments at
+/// parse time — these are `"result": "error"` cases in the spec fixtures.
+///
+/// Operators that MapLibre defines but this crate does not yet evaluate are
+/// still accepted here (so their arguments parse); evaluation reports them as
+/// unimplemented. Only genuinely unknown names are rejected.
 fn check_generic_arity(op: &str, argc: usize) -> Result<()> {
     // `case` has an irregular (odd, >= 3) shape.
     if op == "case" {
