@@ -33,6 +33,7 @@ mod context;
 mod distance;
 mod error;
 mod eval;
+mod ext;
 mod geometry;
 mod parse;
 mod typ;
@@ -43,12 +44,19 @@ pub use ast::{Expr, InterpKind, InterpSpace};
 pub use color::Color;
 pub use context::{EvaluationContext, Feature};
 pub use error::{EvalError, ParseError};
+pub use ext::{Function, Macro, Options};
 pub use typ::Type;
 pub use value::{Projection, Value};
 
 /// Parse a MapLibre expression from its JSON representation.
 pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
-    parse::parse(json)
+    parse::parse(json, &Options::default())
+}
+
+/// Parse an expression with user [`Options`] (macros expand at parse time;
+/// function names are accepted as callable operators).
+pub fn parse_with(json: &serde_json::Value, options: &Options) -> Result<Expr, ParseError> {
+    parse::parse(json, options)
 }
 
 /// Statically type-check a parsed expression, optionally against the type a
@@ -72,4 +80,14 @@ pub fn typecheck(
 /// Evaluate a parsed expression against an evaluation context.
 pub fn evaluate(expr: &Expr, ctx: &EvaluationContext) -> Result<Value, EvalError> {
     eval::eval(expr, ctx)
+}
+
+/// Evaluate with user [`Options`], so calls to user functions are dispatched to
+/// their (recursion-limited) bodies.
+pub fn evaluate_with(
+    expr: &Expr,
+    ctx: &EvaluationContext,
+    options: &Options,
+) -> Result<Value, EvalError> {
+    eval::eval_with(expr, ctx, options)
 }

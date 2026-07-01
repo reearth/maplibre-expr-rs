@@ -1,19 +1,53 @@
 //! Evaluating a parsed [`Expr`] against an [`EvaluationContext`].
 
+use std::collections::HashMap;
+
 use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
 use crate::color::Color;
 use crate::context::EvaluationContext;
 use crate::error::EvalError;
+use crate::ext::{Options, MAX_CALL_DEPTH};
 use crate::typ::{is_subtype, Type};
 use crate::value::{FormatSection, Value};
 
 type Result<T> = std::result::Result<T, EvalError>;
 
-/// Evaluate an expression against a context, returning its value.
+/// A user function prepared for evaluation: parameter names plus a parsed body.
+struct UserFn {
+    params: Vec<String>,
+    body: Expr,
+}
+
+/// Evaluate an expression against a context (no user functions).
 pub fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
+    let funcs = HashMap::new();
     let mut ev = Evaluator {
         ctx,
         scope: Vec::new(),
+        funcs: &funcs,
+        depth: 0,
+    };
+    ev.eval(expr)
+}
+
+/// Evaluate with user functions from [`Options`] available as callable ops.
+pub fn eval_with(expr: &Expr, ctx: &EvaluationContext, opts: &Options) -> Result<Value> {
+    let mut funcs = HashMap::new();
+    for (name, f) in &opts.functions {
+        let body = crate::parse::parse(&f.body, opts).map_err(|e| EvalError::new(e.to_string()))?;
+        funcs.insert(
+            name.clone(),
+            UserFn {
+                params: f.params.clone(),
+                body,
+            },
+        );
+    }
+    let mut ev = Evaluator {
+        ctx,
+        scope: Vec::new(),
+        funcs: &funcs,
+        depth: 0,
     };
     ev.eval(expr)
 }
@@ -21,6 +55,8 @@ pub fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
 struct Evaluator<'a> {
     ctx: &'a EvaluationContext,
     scope: Vec<(String, Value)>,
+    funcs: &'a HashMap<String, UserFn>,
+    depth: usize,
 }
 
 impl Evaluator<'_> {
@@ -297,6 +333,29 @@ impl Evaluator<'_> {
     }
 
     fn eval_call(&mut self, op: &str, args: &[Expr]) -> Result<Value> {
+        // A user function takes priority: evaluate its arguments, bind them in a
+        // fresh scope, and evaluate its body (recursion is depth-limited).
+        let funcs = self.funcs;
+        if let Some(func) = funcs.get(op) {
+            if self.depth + 1 > MAX_CALL_DEPTH {
+                return Err(EvalError::new(format!(
+                    "Maximum call depth exceeded calling function '{op}'."
+                )));
+            }
+            let mut arg_values = Vec::with_capacity(args.len());
+            for a in args {
+                arg_values.push(self.eval(a)?);
+            }
+            let saved = std::mem::replace(
+                &mut self.scope,
+                func.params.iter().cloned().zip(arg_values).collect(),
+            );
+            self.depth += 1;
+            let result = self.eval(&func.body);
+            self.depth -= 1;
+            self.scope = saved;
+            return result;
+        }
         match op {
             // --- feature / object lookups ---
             "get" => self.op_get(args),

@@ -41,10 +41,18 @@ pub fn typecheck(
 /// error in one becomes a compile error, matching MapLibre's constant folding.
 fn check_constant_errors(expr: &Expr) -> Result<(), ParseError> {
     if is_constant(expr) {
-        if let Err(e) = crate::eval::eval(expr, &crate::context::EvaluationContext::default()) {
-            return Err(ParseError::new(e.to_string()));
+        match crate::eval::eval(expr, &crate::context::EvaluationContext::default()) {
+            Ok(_) => Ok(()),
+            // An unimplemented/custom operator (e.g. a user function) can't be
+            // folded here; check its children instead of failing.
+            Err(e) if e.to_string().starts_with("Unimplemented operator") => {
+                for child in children(expr) {
+                    check_constant_errors(child)?;
+                }
+                Ok(())
+            }
+            Err(e) => Err(ParseError::new(e.to_string())),
         }
-        Ok(())
     } else {
         for child in children(expr) {
             check_constant_errors(child)?;

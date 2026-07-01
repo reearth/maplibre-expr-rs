@@ -5,6 +5,7 @@ use serde_json::Value as Json;
 use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
 use crate::distance::SimpleGeom;
 use crate::error::ParseError;
+use crate::ext::{Options, MAX_MACRO_DEPTH};
 use crate::value::Value;
 
 /// Valid `vertical-align` option values for the `format` operator.
@@ -13,9 +14,9 @@ const VERTICAL_ALIGN: [&str; 3] = ["bottom", "center", "top"];
 type Result<T> = std::result::Result<T, ParseError>;
 
 /// Parse a MapLibre expression from JSON.
-pub fn parse(json: &Json) -> Result<Expr> {
+pub fn parse(json: &Json, opts: &Options) -> Result<Expr> {
     match json {
-        Json::Array(items) => parse_array(items),
+        Json::Array(items) => parse_array(items, opts),
         Json::Object(_) => Err(ParseError::new(
             "Expected an array, but found an object instead.",
         )),
@@ -23,7 +24,12 @@ pub fn parse(json: &Json) -> Result<Expr> {
     }
 }
 
-fn parse_array(items: &[Json]) -> Result<Expr> {
+/// Parse each element of `args` as an expression.
+fn parse_all(args: &[Json], opts: &Options) -> Result<Vec<Expr>> {
+    args.iter().map(|a| parse(a, opts)).collect()
+}
+
+fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
     let first = items
         .first()
         .ok_or_else(|| ParseError::new("Expected an array with at least one element."))?;
@@ -32,12 +38,31 @@ fn parse_array(items: &[Json]) -> Result<Expr> {
     })?;
     let args = &items[1..];
 
+    // User macros expand at parse time; user functions become ordinary calls
+    // that the evaluator dispatches.
+    if opts.macros.contains_key(op) {
+        return expand_macro(op, args, opts);
+    }
+    if let Some(f) = opts.functions.get(op) {
+        if args.len() != f.params.len() {
+            return Err(ParseError::new(format!(
+                "Function '{op}' expects {} argument(s), found {}.",
+                f.params.len(),
+                args.len()
+            )));
+        }
+        return Ok(Expr::Call {
+            op: op.to_string(),
+            args: parse_all(args, opts)?,
+        });
+    }
+
     match op {
         "literal" => {
             expect_arity(op, args, 1)?;
             Ok(Expr::Literal(Value::from_json(&args[0])))
         }
-        "let" => parse_let(args),
+        "let" => parse_let(args, opts),
         "var" => {
             expect_arity(op, args, 1)?;
             let name = args[0]
@@ -45,20 +70,20 @@ fn parse_array(items: &[Json]) -> Result<Expr> {
                 .ok_or_else(|| ParseError::new("'var' requires a string binding name."))?;
             Ok(Expr::Var(name.to_string()))
         }
-        "match" => parse_match(args),
-        "step" => parse_step(args),
-        "interpolate" => parse_interpolate(InterpSpace::Rgb, args),
-        "interpolate-hcl" => parse_interpolate(InterpSpace::Hcl, args),
-        "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args),
-        "format" => parse_format(args),
-        "collator" => parse_collator(args),
-        "number-format" => parse_number_format(args),
+        "match" => parse_match(args, opts),
+        "step" => parse_step(args, opts),
+        "interpolate" => parse_interpolate(InterpSpace::Rgb, args, opts),
+        "interpolate-hcl" => parse_interpolate(InterpSpace::Hcl, args, opts),
+        "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args, opts),
+        "format" => parse_format(args, opts),
+        "collator" => parse_collator(args, opts),
+        "number-format" => parse_number_format(args, opts),
         "within" => parse_within(args),
         "distance" => parse_distance(args),
         "array" => {
             check_generic_arity(op, args.len())?;
             validate_array_type_args(args)?;
-            let parsed = args.iter().map(parse).collect::<Result<Vec<_>>>()?;
+            let parsed = parse_all(args, opts)?;
             Ok(Expr::Call {
                 op: op.to_string(),
                 args: parsed,
@@ -66,13 +91,44 @@ fn parse_array(items: &[Json]) -> Result<Expr> {
         }
         _ => {
             check_generic_arity(op, args.len())?;
-            let args = args.iter().map(parse).collect::<Result<Vec<_>>>()?;
+            let args = parse_all(args, opts)?;
             Ok(Expr::Call {
                 op: op.to_string(),
                 args,
             })
         }
     }
+}
+
+/// Expand a macro call into a `let` binding its parameters to the arguments,
+/// guarding against recursive macros with a depth limit.
+fn expand_macro(op: &str, args: &[Json], opts: &Options) -> Result<Expr> {
+    let m = &opts.macros[op];
+    if args.len() != m.params.len() {
+        return Err(ParseError::new(format!(
+            "Macro '{op}' expects {} argument(s), found {}.",
+            m.params.len(),
+            args.len()
+        )));
+    }
+    let depth = opts.depth.get();
+    if depth >= MAX_MACRO_DEPTH {
+        return Err(ParseError::new(format!(
+            "Macro expansion too deep expanding '{op}' (recursive macro?)."
+        )));
+    }
+    opts.depth.set(depth + 1);
+    let result = (|| {
+        let arg_exprs = parse_all(args, opts)?;
+        let body = parse(&m.body, opts)?;
+        let bindings = m.params.iter().cloned().zip(arg_exprs).collect();
+        Ok(Expr::Let {
+            bindings,
+            body: Box::new(body),
+        })
+    })();
+    opts.depth.set(depth);
+    result
 }
 
 /// Reject unknown operators and calls with the wrong number of arguments at
@@ -178,7 +234,7 @@ fn arity(op: &str) -> Option<(usize, Option<usize>)> {
     })
 }
 
-fn parse_let(args: &[Json]) -> Result<Expr> {
+fn parse_let(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.is_empty() || args.len().is_multiple_of(2) {
         return Err(ParseError::new(
             "Expected an odd number of arguments to 'let'.",
@@ -190,33 +246,33 @@ fn parse_let(args: &[Json]) -> Result<Expr> {
         let name = args[i]
             .as_str()
             .ok_or_else(|| ParseError::new("'let' binding names must be strings."))?;
-        bindings.push((name.to_string(), parse(&args[i + 1])?));
+        bindings.push((name.to_string(), parse(&args[i + 1], opts)?));
         i += 2;
     }
-    let body = parse(&args[args.len() - 1])?;
+    let body = parse(&args[args.len() - 1], opts)?;
     Ok(Expr::Let {
         bindings,
         body: Box::new(body),
     })
 }
 
-fn parse_match(args: &[Json]) -> Result<Expr> {
+fn parse_match(args: &[Json], opts: &Options) -> Result<Expr> {
     // args = input, (label, output)+, default  =>  even count, >= 4.
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return Err(ParseError::new(
             "Expected an even number of arguments (>= 4) to 'match'.",
         ));
     }
-    let input = parse(&args[0])?;
+    let input = parse(&args[0], opts)?;
     let mut arms = Vec::new();
     let mut i = 1;
     while i + 1 < args.len() {
         let labels = parse_match_labels(&args[i])?;
-        let output = parse(&args[i + 1])?;
+        let output = parse(&args[i + 1], opts)?;
         arms.push((labels, output));
         i += 2;
     }
-    let default = parse(&args[args.len() - 1])?;
+    let default = parse(&args[args.len() - 1], opts)?;
     Ok(Expr::Match {
         input: Box::new(input),
         arms,
@@ -235,21 +291,21 @@ fn parse_match_labels(json: &Json) -> Result<Vec<Value>> {
     }
 }
 
-fn parse_step(args: &[Json]) -> Result<Expr> {
+fn parse_step(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.len() < 3 || args.len() % 2 == 1 {
         return Err(ParseError::new(
             "Expected an even number of arguments (>= 4) to 'step'.",
         ));
     }
-    let input = parse(&args[0])?;
-    let output0 = parse(&args[1])?;
+    let input = parse(&args[0], opts)?;
+    let output0 = parse(&args[1], opts)?;
     let mut stops = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
         let stop = args[i]
             .as_f64()
             .ok_or_else(|| ParseError::new("Step stop inputs must be numbers."))?;
-        stops.push((stop, parse(&args[i + 1])?));
+        stops.push((stop, parse(&args[i + 1], opts)?));
         i += 2;
     }
     check_ascending(&stops)?;
@@ -260,21 +316,21 @@ fn parse_step(args: &[Json]) -> Result<Expr> {
     })
 }
 
-fn parse_interpolate(space: InterpSpace, args: &[Json]) -> Result<Expr> {
+fn parse_interpolate(space: InterpSpace, args: &[Json], opts: &Options) -> Result<Expr> {
     if args.len() < 4 || args.len() % 2 == 1 {
         return Err(ParseError::new(
             "Expected an even number of arguments (>= 4) to 'interpolate'.",
         ));
     }
     let kind = parse_interp_kind(&args[0])?;
-    let input = parse(&args[1])?;
+    let input = parse(&args[1], opts)?;
     let mut stops = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
         let stop = args[i]
             .as_f64()
             .ok_or_else(|| ParseError::new("Interpolation stop inputs must be numbers."))?;
-        stops.push((stop, parse(&args[i + 1])?));
+        stops.push((stop, parse(&args[i + 1], opts)?));
         i += 2;
     }
     check_ascending(&stops)?;
@@ -289,16 +345,16 @@ fn parse_interpolate(space: InterpSpace, args: &[Json]) -> Result<Expr> {
 
 /// Parse `["within", geojson]`, extracting polygon rings (as `[lng, lat]`)
 /// from a Polygon, MultiPolygon, Feature, or FeatureCollection.
-fn parse_collator(args: &[Json]) -> Result<Expr> {
+fn parse_collator(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.len() != 1 {
         return Err(ParseError::new("Expected one argument to 'collator'."));
     }
-    let opts = args[0]
+    let obj = args[0]
         .as_object()
         .ok_or_else(|| ParseError::new("'collator' argument must be an options object."))?;
     let opt = |key: &str| -> Result<Option<Box<Expr>>> {
-        match opts.get(key) {
-            Some(v) => Ok(Some(Box::new(parse(v)?))),
+        match obj.get(key) {
+            Some(v) => Ok(Some(Box::new(parse(v, opts)?))),
             None => Ok(None),
         }
     };
@@ -309,24 +365,24 @@ fn parse_collator(args: &[Json]) -> Result<Expr> {
     })
 }
 
-fn parse_number_format(args: &[Json]) -> Result<Expr> {
+fn parse_number_format(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.len() != 2 {
         return Err(ParseError::new(
             "Expected two arguments to 'number-format'.",
         ));
     }
-    let value = Box::new(parse(&args[0])?);
-    let opts = args[1]
+    let value = Box::new(parse(&args[0], opts)?);
+    let obj = args[1]
         .as_object()
         .ok_or_else(|| ParseError::new("'number-format' options must be an object."))?;
-    if opts.contains_key("currency") && opts.contains_key("unit") {
+    if obj.contains_key("currency") && obj.contains_key("unit") {
         return Err(ParseError::new(
             "Cannot use both 'currency' and 'unit' in 'number-format'.",
         ));
     }
     let opt = |key: &str| -> Result<Option<Box<Expr>>> {
-        match opts.get(key) {
-            Some(v) => Ok(Some(Box::new(parse(v)?))),
+        match obj.get(key) {
+            Some(v) => Ok(Some(Box::new(parse(v, opts)?))),
             None => Ok(None),
         }
     };
@@ -513,7 +569,7 @@ fn parse_polygon(rings: &[Json]) -> Option<Vec<Vec<(f64, f64)>>> {
     Some(out)
 }
 
-fn parse_format(args: &[Json]) -> Result<Expr> {
+fn parse_format(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.is_empty() {
         return Err(ParseError::new(
             "Expected at least one argument to 'format'.",
@@ -532,13 +588,13 @@ fn parse_format(args: &[Json]) -> Result<Expr> {
             let obj = arg.as_object().unwrap();
             let section = sections.last_mut().unwrap();
             if let Some(v) = obj.get("font-scale") {
-                section.scale = Some(parse(v)?);
+                section.scale = Some(parse(v, opts)?);
             }
             if let Some(v) = obj.get("text-font") {
-                section.font = Some(parse(v)?);
+                section.font = Some(parse(v, opts)?);
             }
             if let Some(v) = obj.get("text-color") {
-                section.text_color = Some(parse(v)?);
+                section.text_color = Some(parse(v, opts)?);
             }
             if let Some(v) = obj.get("vertical-align") {
                 if let Some(s) = v.as_str() {
@@ -548,11 +604,11 @@ fn parse_format(args: &[Json]) -> Result<Expr> {
                         )));
                     }
                 }
-                section.vertical_align = Some(parse(v)?);
+                section.vertical_align = Some(parse(v, opts)?);
             }
         } else {
             sections.push(FormatArg {
-                content: parse(arg)?,
+                content: parse(arg, opts)?,
                 scale: None,
                 font: None,
                 text_color: None,

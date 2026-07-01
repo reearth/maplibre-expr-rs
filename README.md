@@ -54,6 +54,41 @@ MapLibre's wording. Message-for-message parity is future work; today the
 conformance suite only checks *whether* an expression compiles, not the error
 string.
 
+## Extensions: macros and functions
+
+Beyond the standard operators, you can plug your own operators in through
+[`Options`], passed to `parse_with` / `evaluate_with`:
+
+- A **macro** expands at parse time into a `let` binding its parameters to the
+  call arguments — zero runtime cost, but it cannot recurse (a recursion-depth
+  limit rejects cyclic macros).
+- A **function** stays a call in the tree and runs at evaluation time, so it
+  *may* recurse; a call-depth limit turns runaway recursion into an error
+  instead of a stack overflow.
+
+```rust
+use maplibre_expr::{parse_with, evaluate_with, EvaluationContext, Options, Value};
+use serde_json::json;
+
+let mut opts = Options::new();
+opts.macro_def("double", vec!["x".into()], json!(["*", ["var", "x"], 2]));
+opts.function(
+    "sum",
+    vec!["n".into()],
+    json!(["case", ["<=", ["var", "n"], 0], 0,
+           ["+", ["var", "n"], ["sum", ["-", ["var", "n"], 1]]]]),
+);
+
+let expr = parse_with(&json!(["sum", ["double", 3]]), &opts).unwrap();
+let out = evaluate_with(&expr, &EvaluationContext::new(), &opts).unwrap();
+assert_eq!(out, Value::Number(21.0)); // sum(6)
+```
+
+These are parser/runtime *options*, not a new dialect — a tree without any
+custom operators parses and evaluates identically with or without them.
+
+[`Options`]: https://docs.rs/maplibre-expr
+
 ## Implementation notes
 
 - **`distance` uses a brute-force pairwise scan** rather than MapLibre's
