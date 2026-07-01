@@ -117,7 +117,8 @@ fn arity(op: &str) -> Option<(usize, Option<usize>)> {
         "index-of" => (2, Some(3)),
         "slice" => (2, Some(3)),
         "length" => (1, Some(1)),
-        "feature-state" | "global-state" | "config" => (1, Some(2)),
+        "feature-state" | "config" => (1, Some(2)),
+        "global-state" => (1, Some(1)),
 
         // decision / boolean
         "!" => (1, Some(1)),

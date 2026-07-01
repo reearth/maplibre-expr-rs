@@ -166,6 +166,16 @@ impl Evaluator<'_> {
                 .zoom
                 .map(Value::Number)
                 .ok_or_else(|| EvalError::new("The 'zoom' expression is unavailable here.")),
+            "global-state" => {
+                let key = self.eval_string(&args[0])?;
+                Ok(self
+                    .ctx
+                    .global_state
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or(Value::Null))
+            }
+            "typeof" => Ok(Value::String(type_string(&self.eval(&args[0])?))),
 
             // --- collections ---
             "at" => self.op_at(args),
@@ -663,6 +673,38 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// The detailed type name reported by `typeof`, e.g. `"array<number, 3>"`,
+/// mirroring MapLibre's `typeToString(typeOf(value))`.
+fn type_string(v: &Value) -> String {
+    match v {
+        Value::Null => "null".to_string(),
+        Value::Bool(_) => "boolean".to_string(),
+        Value::Number(_) => "number".to_string(),
+        Value::String(_) => "string".to_string(),
+        Value::Color(_) => "color".to_string(),
+        Value::Object(_) => "object".to_string(),
+        Value::Array(items) => {
+            let mut item_type: Option<String> = None;
+            for it in items {
+                let t = type_string(it);
+                match &item_type {
+                    None => item_type = Some(t),
+                    Some(existing) if *existing == t => {}
+                    Some(_) => {
+                        item_type = Some("value".to_string());
+                        break;
+                    }
+                }
+            }
+            format!(
+                "array<{}, {}>",
+                item_type.unwrap_or_else(|| "value".to_string()),
+                items.len()
+            )
+        }
+    }
+}
+
 fn type_error(expected: &str, found: &Value) -> EvalError {
     EvalError::new(format!(
         "Expected value to be of type {expected}, but found {} instead.",
@@ -838,15 +880,57 @@ fn interpolate_values(lo: &Value, hi: &Value, t: f64, space: InterpSpace) -> Res
     }
 }
 
-fn interpolate_color(a: Color, b: Color, t: f64, _space: InterpSpace) -> Color {
-    // Component-wise RGBA interpolation. HCL/LAB spaces fall back to this and
-    // are covered by the fixture skip-list until proper conversion lands.
-    Color::new(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-        a.a + (b.a - a.a) * t,
-    )
+fn interpolate_color(a: Color, b: Color, t: f64, space: InterpSpace) -> Color {
+    let lerp = |x: f64, y: f64| x + (y - x) * t;
+    match space {
+        InterpSpace::Rgb => Color::new(
+            lerp(a.r, b.r),
+            lerp(a.g, b.g),
+            lerp(a.b, b.b),
+            lerp(a.a, b.a),
+        ),
+        InterpSpace::Lab => {
+            let [l0, a0, b0, al0] = a.to_lab();
+            let [l1, a1, b1, al1] = b.to_lab();
+            Color::from_lab([lerp(l0, l1), lerp(a0, a1), lerp(b0, b1), lerp(al0, al1)])
+        }
+        InterpSpace::Hcl => {
+            // Hue takes the shortest path around the circle; NaN (achromatic)
+            // hues pin to the defined endpoint. Mirrors chroma.js / MapLibre.
+            let [h0, c0, l0, al0] = a.to_hcl();
+            let [h1, c1, l1, al1] = b.to_hcl();
+            let (hue, chroma) = if !h0.is_nan() && !h1.is_nan() {
+                let mut dh = h1 - h0;
+                if h1 > h0 && dh > 180.0 {
+                    dh -= 360.0;
+                } else if h1 < h0 && h0 - h1 > 180.0 {
+                    dh += 360.0;
+                }
+                (h0 + t * dh, lerp(c0, c1))
+            } else if !h0.is_nan() {
+                (
+                    h0,
+                    if l1 == 1.0 || l1 == 0.0 {
+                        c0
+                    } else {
+                        lerp(c0, c1)
+                    },
+                )
+            } else if !h1.is_nan() {
+                (
+                    h1,
+                    if l0 == 1.0 || l0 == 0.0 {
+                        c1
+                    } else {
+                        lerp(c0, c1)
+                    },
+                )
+            } else {
+                (f64::NAN, lerp(c0, c1))
+            };
+            Color::from_hcl([hue, chroma, lerp(l0, l1), lerp(al0, al1)])
+        }
+    }
 }
 
 /// Solve a unit cubic Bézier easing curve for `y` at parameter `x` (both in

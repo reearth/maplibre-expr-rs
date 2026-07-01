@@ -133,8 +133,19 @@ fn run_fixture(path: &Path) -> Result<(), Failed> {
         .cloned()
         .unwrap_or_default();
 
+    // `globalState` is a fixture-level map shared across all inputs.
+    let global_state: BTreeMap<String, Value> = doc
+        .get("globalState")
+        .and_then(Json::as_object)
+        .map(|o| {
+            o.iter()
+                .map(|(k, v)| (k.clone(), Value::from_json(v)))
+                .collect()
+        })
+        .unwrap_or_default();
+
     for (i, input) in inputs.iter().enumerate() {
-        let ctx = build_context(input)?;
+        let ctx = build_context(input)?.with_global_state(global_state.clone());
         let expected_output = outputs
             .get(i)
             .ok_or_else(|| format!("input #{i} has no expected output"))?;

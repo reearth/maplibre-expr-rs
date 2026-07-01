@@ -40,6 +40,28 @@ impl Color {
         [self.r * 255.0, self.g * 255.0, self.b * 255.0, self.a]
     }
 
+    /// Convert to CIE L\*a\*b\* as `[l, a, b, alpha]` (from straight rgb).
+    pub fn to_lab(self) -> [f64; 4] {
+        rgb_to_lab([self.r, self.g, self.b, self.a])
+    }
+
+    /// Build a color from CIE L\*a\*b\* `[l, a, b, alpha]`.
+    pub fn from_lab(lab: [f64; 4]) -> Color {
+        let [r, g, b, a] = lab_to_rgb(lab);
+        Color::new(r, g, b, a)
+    }
+
+    /// Convert to HCL as `[h, c, l, alpha]`; hue is `NaN` for achromatic colors.
+    pub fn to_hcl(self) -> [f64; 4] {
+        rgb_to_hcl([self.r, self.g, self.b, self.a])
+    }
+
+    /// Build a color from HCL `[h, c, l, alpha]`.
+    pub fn from_hcl(hcl: [f64; 4]) -> Color {
+        let [r, g, b, a] = hcl_to_rgb(hcl);
+        Color::new(r, g, b, a)
+    }
+
     /// Parse a CSS color string. Supports `#rgb`/`#rrggbb`/`#rrggbbaa`,
     /// `rgb()`/`rgba()`, `hsl()`/`hsla()`, and a table of named colors.
     pub fn parse(input: &str) -> Option<Color> {
@@ -206,6 +228,115 @@ fn hue_to_rgb(p: f64, q: f64, t: f64) -> f64 {
     } else {
         p
     }
+}
+
+// ---- CIE L*a*b* / HCL conversions ------------------------------------
+//
+// Ported from maplibre-style-spec's `color_spaces.ts` (D50 reference white),
+// so that `interpolate-lab` / `interpolate-hcl` match the reference exactly.
+// See https://observablehq.com/@mbostock/lab-and-rgb
+
+const XN: f64 = 0.96422;
+const YN: f64 = 1.0;
+const ZN: f64 = 0.82521;
+const T0: f64 = 4.0 / 29.0;
+const T1: f64 = 6.0 / 29.0;
+const T2: f64 = 3.0 * T1 * T1;
+const T3: f64 = T1 * T1 * T1;
+
+fn rgb_to_lab([r, g, b, alpha]: [f64; 4]) -> [f64; 4] {
+    let r = rgb2xyz(r);
+    let g = rgb2xyz(g);
+    let b = rgb2xyz(b);
+    let y = xyz2lab((0.2225045 * r + 0.7168786 * g + 0.0606169 * b) / YN);
+    let (x, z) = if r == g && g == b {
+        (y, y)
+    } else {
+        (
+            xyz2lab((0.4360747 * r + 0.3850649 * g + 0.1430804 * b) / XN),
+            xyz2lab((0.0139322 * r + 0.0971045 * g + 0.7141733 * b) / ZN),
+        )
+    };
+    let l = 116.0 * y - 16.0;
+    [
+        if l < 0.0 { 0.0 } else { l },
+        500.0 * (x - y),
+        200.0 * (y - z),
+        alpha,
+    ]
+}
+
+fn lab_to_rgb([l, a, b, alpha]: [f64; 4]) -> [f64; 4] {
+    let y = (l + 16.0) / 116.0;
+    let x = if a.is_nan() { y } else { y + a / 500.0 };
+    let z = if b.is_nan() { y } else { y - b / 200.0 };
+    let y = YN * lab2xyz(y);
+    let x = XN * lab2xyz(x);
+    let z = ZN * lab2xyz(z);
+    [
+        xyz2rgb(3.1338561 * x - 1.6168667 * y - 0.4906146 * z),
+        xyz2rgb(-0.9787684 * x + 1.9161415 * y + 0.033454 * z),
+        xyz2rgb(0.0719453 * x - 0.2289914 * y + 1.4052427 * z),
+        alpha,
+    ]
+}
+
+fn rgb2xyz(x: f64) -> f64 {
+    if x <= 0.04045 {
+        x / 12.92
+    } else {
+        ((x + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn xyz2lab(t: f64) -> f64 {
+    if t > T3 {
+        t.cbrt()
+    } else {
+        t / T2 + T0
+    }
+}
+
+fn lab2xyz(t: f64) -> f64 {
+    if t > T1 {
+        t * t * t
+    } else {
+        T2 * (t - T0)
+    }
+}
+
+fn xyz2rgb(x: f64) -> f64 {
+    let x = if x <= 0.00304 {
+        12.92 * x
+    } else {
+        1.055 * x.powf(1.0 / 2.4) - 0.055
+    };
+    x.clamp(0.0, 1.0)
+}
+
+fn constrain_angle(angle: f64) -> f64 {
+    let a = angle % 360.0;
+    if a < 0.0 {
+        a + 360.0
+    } else {
+        a
+    }
+}
+
+fn rgb_to_hcl(rgb: [f64; 4]) -> [f64; 4] {
+    let [l, a, b, alpha] = rgb_to_lab(rgb);
+    let c = (a * a + b * b).sqrt();
+    let h = if (c * 10000.0).round() != 0.0 {
+        constrain_angle(b.atan2(a).to_degrees())
+    } else {
+        f64::NAN
+    };
+    [h, c, l, alpha]
+}
+
+fn hcl_to_rgb([h, c, l, alpha]: [f64; 4]) -> [f64; 4] {
+    let h = if h.is_nan() { 0.0 } else { h.to_radians() };
+    lab_to_rgb([l, h.cos() * c, h.sin() * c, alpha])
 }
 
 /// A small subset of the CSS named colors that appear in the test fixtures.

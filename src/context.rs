@@ -13,11 +13,13 @@ pub struct Feature {
 }
 
 /// Everything an expression can read while evaluating: global parameters such
-/// as `zoom`, and the current [`Feature`].
+/// as `zoom`, the current [`Feature`], and the shared global-state map read by
+/// the `global-state` operator.
 #[derive(Debug, Clone, Default)]
 pub struct EvaluationContext {
     pub zoom: Option<f64>,
     pub feature: Feature,
+    pub global_state: BTreeMap<String, Value>,
 }
 
 impl EvaluationContext {
@@ -32,6 +34,11 @@ impl EvaluationContext {
 
     pub fn with_feature(mut self, feature: Feature) -> EvaluationContext {
         self.feature = feature;
+        self
+    }
+
+    pub fn with_global_state(mut self, state: BTreeMap<String, Value>) -> EvaluationContext {
+        self.global_state = state;
         self
     }
 }

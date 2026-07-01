@@ -1,6 +1,6 @@
 # Fixtures the evaluator does not yet pass, reported as `ignored` by the spec
 # harness instead of failing the build. One fixture name per line (its path
-# under tests/fixtures/expression, e.g. `interpolate-hcl/basic`).
+# under tests/fixtures/expression, e.g. `within/point-within-polygon`).
 #
 # This is the running to-do list: as operators and behaviours are implemented,
 # delete the corresponding lines and the fixtures graduate to enforced tests.
@@ -12,8 +12,8 @@
 equal/collator-value
 
 # === Operators not yet implemented (distance/within/collator/format/image/
-# number-format/feature-state/global-state/resolved-locale/typeof/... and the
-# geo/locale builtins). Evaluation reports them as unimplemented.  (175 fixtures) ===
+# number-format/feature-state/resolved-locale/is-supported-script/... and the
+# geo/locale builtins). Evaluation reports them as unimplemented.  (158 fixtures) ===
 collator/accent-equals-de
 collator/accent-lt-en
 collator/accent-not-equals-en
@@ -83,19 +83,6 @@ format/implicit-coerce
 format/implicit-omit
 format/multiple-styles
 format/to-string
-global-state/basic
-global-state/false/empty
-global-state/false/empty-string
-global-state/false/false
-global-state/false/null
-global-state/false/null-property
-global-state/false/zero
-global-state/invalid-property-arg
-global-state/true/number
-global-state/true/string
-global-state/true/true
-global-state/unexpected-second-arg
-global-state/unset-with-other-keys
 heatmap-density/basic
 image/basic
 image/coalesce
@@ -105,7 +92,6 @@ image/invalid-image-name/boolean
 image/invalid-image-name/non-string-expression
 image/invalid-image-name/null
 image/invalid-image-name/number
-interpolate/global-state/basic
 is-supported-script/default
 legacy/categorical/array
 legacy/categorical/array-default
@@ -165,9 +151,6 @@ number-format/default
 number-format/precision
 number-format/unit
 resolved-locale/basic
-typeof/basic
-typeof/expression-value
-typeof/literal-value
 within/expression-geojson
 within/line-within-collection-of-multipolygons
 within/line-within-collection-of-polygons
@@ -190,9 +173,9 @@ within/point-within-polygons
 within/points-within-polygon
 within/points-within-polygons
 
-# === `interpolate-hcl` / `interpolate-lab`: interpolation in HCL/LAB color spaces
-# needs the RGB<->HCL/LAB conversions, which are not implemented yet.  (16 fixtures) ===
-interpolate-hcl/linear-color
+# === `interpolate-hcl` / `interpolate-lab`: the remaining fixtures need the typed
+# ColorArray value or compile-time output-type validation (below), not the
+# HCL/LAB conversions themselves, which are implemented.  (14 fixtures) ===
 interpolate-hcl/linear-color-array
 interpolate-hcl/uninterpolable-output/boolean
 interpolate-hcl/uninterpolable-output/null
@@ -200,7 +183,6 @@ interpolate-hcl/uninterpolable-output/number
 interpolate-hcl/uninterpolable-output/number-array
 interpolate-hcl/uninterpolable-output/projection
 interpolate-hcl/uninterpolable-output/string
-interpolate-lab/linear-color
 interpolate-lab/linear-color-array
 interpolate-lab/uninterpolable-output/boolean
 interpolate-lab/uninterpolable-output/null
@@ -211,8 +193,9 @@ interpolate-lab/uninterpolable-output/string
 
 # === Compile-time type validation: MapLibre rejects these at compile time (label
 # type mismatches, non-comparable operand types, invalid array specs, unbound
-# vars, ...). This crate has no static type-inference pass yet, so the
-# expressions parse and the error surfaces later or not at all.  (70 fixtures) ===
+# vars, uninterpolatable output types, ...). This crate has no static
+# type-inference pass yet, so the expressions parse and the error surfaces
+# later or not at all.  (71 fixtures) ===
 array/invalid-array-input/array-items-as-args
 array/invalid-item-type/expression
 array/invalid-item-type/invalid-string
@@ -230,6 +213,7 @@ equal/color
 equal/mismatch
 equal/object
 get/from-literal--missing
+global-state/invalid-property-arg
 greater/boolean
 greater/mismatch
 greater/null
@@ -286,7 +270,7 @@ zoom/invalid-no-curve
 
 # === Type-context coercion & special value types: outputs that depend on the
 # expected property type (implicit string/color coercion) or on typed values
-# like Formatted, ResolvedImage, Padding, ColorArray, ProjectionDefinition.  (15 fixtures) ===
+# like Formatted, ResolvedImage, Padding, ColorArray, ProjectionDefinition.  (16 fixtures) ===
 array/default-value
 array/implicit-2
 array/implicit-3
@@ -294,6 +278,7 @@ case/interpolated-output
 coalesce/error
 coalesce/inference
 constant-folding/to-color-inferred
+interpolate/global-state/missing-property
 interpolate/linear-color-array
 interpolate/linear-number-array
 interpolate/projection/higher-than-stop
