@@ -120,3 +120,48 @@ fn function_arity_is_checked_at_parse() {
     opts.function("id", vec!["x".into()], json!(["var", "x"]));
     assert!(parse_with(&json!(["id", 1, 2]), &opts).is_err());
 }
+
+#[test]
+fn native_function_changes_result_by_argument() {
+    let mut opts = Options::new();
+    // A native closure that dynamically maps codes to labels.
+    opts.native("label", 1, |args, _ctx| {
+        let code = args[0].as_str().unwrap_or("");
+        Ok(Value::String(
+            match code {
+                "hi" => "Hospital",
+                "sc" => "School",
+                _ => "Unknown",
+            }
+            .to_string(),
+        ))
+    });
+    let expr = parse_with(&json!(["label", ["get", "code"]]), &opts).unwrap();
+    let ctx = feature_with("code", Value::String("sc".into()));
+    assert_eq!(
+        evaluate_with(&expr, &ctx, &opts).unwrap(),
+        Value::String("School".into())
+    );
+}
+
+#[test]
+fn native_function_can_read_context() {
+    let mut opts = Options::new();
+    // zoom + argument, reading the context directly.
+    opts.native("plus_zoom", 1, |args, ctx| {
+        let n = args[0].as_number().unwrap_or(0.0);
+        Ok(Value::Number(n + ctx.zoom.unwrap_or(0.0)))
+    });
+    let expr = parse_with(&json!(["plus_zoom", 10]), &opts).unwrap();
+    let ctx = EvaluationContext::new().with_zoom(5.0);
+    assert_eq!(
+        evaluate_with(&expr, &ctx, &opts).unwrap(),
+        Value::Number(15.0)
+    );
+}
+
+#[test]
+fn options_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Options>();
+}

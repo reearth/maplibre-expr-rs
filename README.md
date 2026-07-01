@@ -65,6 +65,10 @@ Beyond the standard operators, you can plug your own operators in through
 - A **function** stays a call in the tree and runs at evaluation time, so it
   *may* recurse; a call-depth limit turns runaway recursion into an error
   instead of a stack overflow.
+- A **native function** ([`Options::native`]) is a Rust closure invoked with
+  the evaluated arguments (and the context), so results can be computed
+  dynamically. `Options` is `Send + Sync`, so the registry can be shared across
+  threads (native closures must be `Send + Sync`).
 
 ```rust
 use maplibre_expr::{parse_with, evaluate_with, EvaluationContext, Options, Value};

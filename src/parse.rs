@@ -56,6 +56,18 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
             args: parse_all(args, opts)?,
         });
     }
+    if let Some((arity, _)) = opts.natives.get(op) {
+        if args.len() != *arity {
+            return Err(ParseError::new(format!(
+                "Function '{op}' expects {arity} argument(s), found {}.",
+                args.len()
+            )));
+        }
+        return Ok(Expr::Call {
+            op: op.to_string(),
+            args: parse_all(args, opts)?,
+        });
+    }
 
     match op {
         "literal" => {
@@ -111,13 +123,14 @@ fn expand_macro(op: &str, args: &[Json], opts: &Options) -> Result<Expr> {
             args.len()
         )));
     }
-    let depth = opts.depth.get();
+    use std::sync::atomic::Ordering::Relaxed;
+    let depth = opts.depth.load(Relaxed);
     if depth >= MAX_MACRO_DEPTH {
         return Err(ParseError::new(format!(
             "Macro expansion too deep expanding '{op}' (recursive macro?)."
         )));
     }
-    opts.depth.set(depth + 1);
+    opts.depth.store(depth + 1, Relaxed);
     let result = (|| {
         let arg_exprs = parse_all(args, opts)?;
         let body = parse(&m.body, opts)?;
@@ -127,7 +140,7 @@ fn expand_macro(op: &str, args: &[Json], opts: &Options) -> Result<Expr> {
             body: Box::new(body),
         })
     })();
-    opts.depth.set(depth);
+    opts.depth.store(depth, Relaxed);
     result
 }
 

@@ -6,7 +6,7 @@ use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
 use crate::color::Color;
 use crate::context::EvaluationContext;
 use crate::error::EvalError;
-use crate::ext::{Options, MAX_CALL_DEPTH};
+use crate::ext::{NativeFn, Options, MAX_CALL_DEPTH};
 use crate::typ::{is_subtype, Type};
 use crate::value::{FormatSection, Value};
 
@@ -21,16 +21,18 @@ struct UserFn {
 /// Evaluate an expression against a context (no user functions).
 pub fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
     let funcs = HashMap::new();
+    let natives = HashMap::new();
     let mut ev = Evaluator {
         ctx,
         scope: Vec::new(),
         funcs: &funcs,
+        natives: &natives,
         depth: 0,
     };
     ev.eval(expr)
 }
 
-/// Evaluate with user functions from [`Options`] available as callable ops.
+/// Evaluate with user functions and native functions from [`Options`].
 pub fn eval_with(expr: &Expr, ctx: &EvaluationContext, opts: &Options) -> Result<Value> {
     let mut funcs = HashMap::new();
     for (name, f) in &opts.functions {
@@ -47,6 +49,7 @@ pub fn eval_with(expr: &Expr, ctx: &EvaluationContext, opts: &Options) -> Result
         ctx,
         scope: Vec::new(),
         funcs: &funcs,
+        natives: &opts.natives,
         depth: 0,
     };
     ev.eval(expr)
@@ -56,6 +59,7 @@ struct Evaluator<'a> {
     ctx: &'a EvaluationContext,
     scope: Vec<(String, Value)>,
     funcs: &'a HashMap<String, UserFn>,
+    natives: &'a HashMap<String, (usize, NativeFn)>,
     depth: usize,
 }
 
@@ -355,6 +359,15 @@ impl Evaluator<'_> {
             self.depth -= 1;
             self.scope = saved;
             return result;
+        }
+        // A native function: evaluate the arguments and hand them to the closure.
+        let natives = self.natives;
+        if let Some((_, f)) = natives.get(op) {
+            let mut arg_values = Vec::with_capacity(args.len());
+            for a in args {
+                arg_values.push(self.eval(a)?);
+            }
+            return f(&arg_values, self.ctx);
         }
         match op {
             // --- feature / object lookups ---
