@@ -11,7 +11,7 @@ authors = ["Re:Earth and contributors"]
 keywords = ["maplibre", "mapbox", "expression", "style", "gis"]
 categories = ["parsing", "graphics"]
 readme = "README.md"
-exclude = ["/.github"]
+exclude = ["/.github", "/tests/fixtures"]
 
 [lib]
 name = "maplibre_expr"
