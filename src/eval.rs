@@ -50,7 +50,8 @@ impl Evaluator<'_> {
                 space,
                 input,
                 stops,
-            } => self.eval_interpolate(*kind, *space, input, stops),
+                projection,
+            } => self.eval_interpolate(*kind, *space, input, stops, *projection),
             Expr::Call { op, args } => self.eval_call(op, args),
             Expr::Format(sections) => self.eval_format(sections),
             Expr::Within(polygons) => {
@@ -140,14 +141,15 @@ impl Evaluator<'_> {
         space: InterpSpace,
         input: &Expr,
         stops: &[(f64, Expr)],
+        projection: bool,
     ) -> Result<Value> {
         let x = self.eval_number(input)?;
-        // Below the first / above the last stop: clamp to the endpoint.
+        // Below the first / above the last stop: clamp to the endpoint (raw).
         if x <= stops[0].0 {
-            return self.eval_interp_output(&stops[0].1);
+            return self.eval_stop(&stops[0].1, projection);
         }
         if x >= stops[stops.len() - 1].0 {
-            return self.eval_interp_output(&stops[stops.len() - 1].1);
+            return self.eval_stop(&stops[stops.len() - 1].1, projection);
         }
         // Find the bracketing pair.
         let mut idx = 0;
@@ -158,10 +160,34 @@ impl Evaluator<'_> {
             }
         }
         let (lo, hi) = (stops[idx].0, stops[idx + 1].0);
-        let lo_v = self.eval_interp_output(&stops[idx].1)?;
-        let hi_v = self.eval_interp_output(&stops[idx + 1].1)?;
+        let lo_v = self.eval_stop(&stops[idx].1, projection)?;
+        let hi_v = self.eval_stop(&stops[idx + 1].1, projection)?;
         let t = interpolation_factor(kind, x, lo, hi);
+        if projection {
+            use crate::value::Projection;
+            let name = |v: &Value| match v {
+                Value::String(s) => s.clone(),
+                Value::Projection(Projection::Named(s)) => s.clone(),
+                Value::Projection(Projection::Transition { from, .. }) => from.clone(),
+                other => other.to_string(),
+            };
+            return Ok(Value::Projection(Projection::Transition {
+                from: name(&lo_v),
+                to: name(&hi_v),
+                transition: t,
+            }));
+        }
         interpolate_values(&lo_v, &hi_v, t, space)
+    }
+
+    /// Evaluate a stop output. For projection outputs the value stays raw;
+    /// otherwise a bare color string is parsed to a color.
+    fn eval_stop(&mut self, expr: &Expr, projection: bool) -> Result<Value> {
+        if projection {
+            self.eval(expr)
+        } else {
+            self.eval_interp_output(expr)
+        }
     }
 
     /// Evaluate an interpolation stop output, coercing bare color strings
@@ -806,6 +832,10 @@ fn type_string(v: &Value) -> String {
         Value::String(_) => "string".to_string(),
         Value::Image { .. } => "resolvedImage".to_string(),
         Value::Formatted(_) => "formatted".to_string(),
+        Value::NumberArray(_) => "numberArray".to_string(),
+        Value::ColorArray(_) => "colorArray".to_string(),
+        Value::Padding(_) => "padding".to_string(),
+        Value::Projection(_) => "projectionDefinition".to_string(),
         Value::Color(_) => "color".to_string(),
         Value::Object(_) => "object".to_string(),
         Value::Array(items) => {
@@ -886,8 +916,96 @@ fn coerce_value(ty: &Type, v: Value) -> Result<Value> {
                 vertical_align: None,
             }]),
         }),
+        Type::NumberArray => coerce_number_array(v),
+        Type::Padding => coerce_padding(v),
+        Type::ColorArray => coerce_color_array(v),
+        Type::ProjectionDefinition => coerce_projection(v),
         // Types without a dedicated runtime coercion pass through unchanged.
         _ => Ok(v),
+    }
+}
+
+fn coerce_number_array(v: Value) -> Result<Value> {
+    match &v {
+        Value::NumberArray(_) => Ok(v),
+        Value::Number(n) => Ok(Value::NumberArray(vec![*n])),
+        Value::Array(a) => {
+            let mut out = Vec::with_capacity(a.len());
+            for e in a {
+                match e {
+                    Value::Number(n) => out.push(*n),
+                    other => return Err(type_error("number", other)),
+                }
+            }
+            Ok(Value::NumberArray(out))
+        }
+        _ => Err(EvalError::new(format!(
+            "Could not parse numberArray from value '{v}'"
+        ))),
+    }
+}
+
+fn coerce_padding(v: Value) -> Result<Value> {
+    let err = || EvalError::new(format!("Could not parse padding from value '{v}'"));
+    match &v {
+        Value::Padding(_) => Ok(v),
+        Value::Number(n) => Ok(Value::Padding([*n; 4])),
+        Value::Array(a) => {
+            let ns: Option<Vec<f64>> = a.iter().map(Value::as_number).collect();
+            let ns = ns.ok_or_else(err)?;
+            let p = match ns.len() {
+                1 => [ns[0]; 4],
+                2 => [ns[0], ns[1], ns[0], ns[1]],
+                3 => [ns[0], ns[1], ns[2], ns[1]],
+                4 => [ns[0], ns[1], ns[2], ns[3]],
+                _ => return Err(err()),
+            };
+            Ok(Value::Padding(p))
+        }
+        _ => Err(err()),
+    }
+}
+
+fn coerce_color_array(v: Value) -> Result<Value> {
+    let err = || EvalError::new(format!("Could not parse colorArray from value '{v}'"));
+    match &v {
+        Value::ColorArray(_) => Ok(v),
+        Value::Color(c) => Ok(Value::ColorArray(vec![*c])),
+        Value::String(s) => Color::parse(s)
+            .map(|c| Value::ColorArray(vec![c]))
+            .ok_or_else(err),
+        Value::Array(a) => {
+            let mut out = Vec::with_capacity(a.len());
+            for e in a {
+                match coerce_color(e) {
+                    Some(c) => out.push(c),
+                    None => return Err(err()),
+                }
+            }
+            Ok(Value::ColorArray(out))
+        }
+        _ => Err(err()),
+    }
+}
+
+fn coerce_projection(v: Value) -> Result<Value> {
+    use crate::value::Projection;
+    match &v {
+        Value::Projection(_) => Ok(v),
+        Value::String(s) => Ok(Value::Projection(Projection::Named(s.clone()))),
+        Value::Array(a) if a.len() == 3 => match (a[0].as_str(), a[1].as_str(), a[2].as_number()) {
+            (Some(from), Some(to), Some(t)) => Ok(Value::Projection(Projection::Transition {
+                from: from.to_string(),
+                to: to.to_string(),
+                transition: t,
+            })),
+            _ => Err(EvalError::new(format!(
+                "Could not parse projection from value '{v}'"
+            ))),
+        },
+        _ => Err(EvalError::new(format!(
+            "Could not parse projection from value '{v}'"
+        ))),
     }
 }
 
@@ -1000,6 +1118,9 @@ fn to_string_value(v: &Value) -> String {
         Value::Color(c) => c.to_string(),
         Value::Image { name, .. } => name.clone(),
         Value::Formatted(sections) => sections.iter().map(|s| s.text.clone()).collect(),
+        Value::NumberArray(_) | Value::ColorArray(_) | Value::Padding(_) | Value::Projection(_) => {
+            v.to_string()
+        }
         Value::Array(_) | Value::Object(_) => json_string(v),
     }
 }
@@ -1030,6 +1151,19 @@ fn json_string(v: &Value) -> String {
             let s: String = sections.iter().map(|s| s.text.clone()).collect();
             format!("{s:?}")
         }
+        Value::NumberArray(_) | Value::Padding(_) => {
+            let nums = match v {
+                Value::NumberArray(a) => a.clone(),
+                Value::Padding(a) => a.to_vec(),
+                _ => unreachable!(),
+            };
+            let parts: Vec<String> = nums
+                .iter()
+                .map(|n| crate::value::format_number(*n))
+                .collect();
+            format!("{{\"values\":[{}]}}", parts.join(","))
+        }
+        Value::ColorArray(_) | Value::Projection(_) => format!("{:?}", v.to_string()),
     }
 }
 
@@ -1061,6 +1195,36 @@ fn interpolate_values(lo: &Value, hi: &Value, t: f64, space: InterpSpace) -> Res
                 out.push(interpolate_values(x, y, t, space)?);
             }
             Ok(Value::Array(out))
+        }
+        (Value::NumberArray(a), Value::NumberArray(b)) if a.len() == b.len() => Ok(
+            Value::NumberArray(a.iter().zip(b).map(|(x, y)| x + (y - x) * t).collect()),
+        ),
+        (Value::Padding(a), Value::Padding(b)) => {
+            let mut p = [0.0; 4];
+            for i in 0..4 {
+                p[i] = a[i] + (b[i] - a[i]) * t;
+            }
+            Ok(Value::Padding(p))
+        }
+        (Value::ColorArray(a), Value::ColorArray(b)) if a.len() == b.len() => {
+            Ok(Value::ColorArray(
+                a.iter()
+                    .zip(b)
+                    .map(|(x, y)| interpolate_color(*x, *y, t, space))
+                    .collect(),
+            ))
+        }
+        (Value::Projection(a), Value::Projection(b)) => {
+            use crate::value::Projection;
+            let name = |p: &Projection| match p {
+                Projection::Named(s) => s.clone(),
+                Projection::Transition { from, .. } => from.clone(),
+            };
+            Ok(Value::Projection(Projection::Transition {
+                from: name(a),
+                to: name(b),
+                transition: t,
+            }))
         }
         _ => Err(EvalError::new(
             "Interpolation outputs must be numbers, colors, or arrays of numbers.",

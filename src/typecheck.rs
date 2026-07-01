@@ -80,6 +80,7 @@ impl Checker {
                 space,
                 input,
                 stops,
+                ..
             } => self.infer_interpolate(*kind, *space, input, stops, expected),
             Expr::Call { op, args } => self.infer_call(op, args, expected),
             Expr::Format(sections) => self.infer_format(sections),
@@ -184,12 +185,19 @@ impl Checker {
     ) -> R {
         let (input_node, _) = self.infer(input, Some(&Type::Number))?;
         let mut output_type = concrete(expected);
-        let (out0_node, t0) = self.infer(output0, output_type.as_ref())?;
-        output_type.get_or_insert(t0);
+        // Projection outputs stay raw (never coerced to the projection object).
+        let projection = matches!(output_type, Some(Type::ProjectionDefinition));
+        let child = |t: &Option<Type>| if projection { None } else { t.clone() };
+        let (out0_node, t0) = self.infer(output0, child(&output_type).as_ref())?;
+        if !projection {
+            output_type.get_or_insert(t0);
+        }
         let mut new_stops = Vec::with_capacity(stops.len());
         for (stop, output) in stops {
-            let (node, t) = self.infer(output, output_type.as_ref())?;
-            output_type.get_or_insert(t);
+            let (node, t) = self.infer(output, child(&output_type).as_ref())?;
+            if !projection {
+                output_type.get_or_insert(t);
+            }
             new_stops.push((*stop, node));
         }
         Ok((
@@ -211,15 +219,31 @@ impl Checker {
         expected: Option<&Type>,
     ) -> R {
         let (input_node, _) = self.infer(input, Some(&Type::Number))?;
-        // hcl/lab interpolation is color-only regardless of the property spec.
+        // hcl/lab interpolation is color-only, except for a colorArray property.
         let mut output_type = match space {
-            InterpSpace::Hcl | InterpSpace::Lab => Some(Type::Color),
+            InterpSpace::Hcl | InterpSpace::Lab => {
+                if matches!(expected, Some(Type::ColorArray)) {
+                    Some(Type::ColorArray)
+                } else {
+                    Some(Type::Color)
+                }
+            }
             InterpSpace::Rgb => concrete(expected),
         };
+        // Projection outputs stay raw (a string or `[from, to, t]` array); the
+        // projection object is produced only by the interpolation itself.
+        let projection = matches!(output_type, Some(Type::ProjectionDefinition));
         let mut new_stops = Vec::with_capacity(stops.len());
         for (stop, output) in stops {
-            let (node, t) = self.infer(output, output_type.as_ref())?;
-            output_type.get_or_insert(t);
+            let child_expected = if projection {
+                None
+            } else {
+                output_type.as_ref()
+            };
+            let (node, t) = self.infer(output, child_expected)?;
+            if !projection {
+                output_type.get_or_insert(t);
+            }
             new_stops.push((*stop, node));
         }
         let out = output_type.unwrap_or(Type::Value);
@@ -234,6 +258,7 @@ impl Checker {
                 space,
                 input: Box::new(input_node),
                 stops: new_stops,
+                projection,
             },
             out,
         ))

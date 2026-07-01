@@ -22,6 +22,25 @@ pub enum Value {
     },
     /// Formatted text (the `format` operator): a list of styled sections.
     Formatted(Vec<FormatSection>),
+    /// A `numberArray` value.
+    NumberArray(Vec<f64>),
+    /// A `colorArray` value.
+    ColorArray(Vec<Color>),
+    /// A `padding` value: `[top, right, bottom, left]`.
+    Padding([f64; 4]),
+    /// A `projectionDefinition`: a named projection or a transition between two.
+    Projection(Projection),
+}
+
+/// A projection definition value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Projection {
+    Named(String),
+    Transition {
+        from: String,
+        to: String,
+        transition: f64,
+    },
 }
 
 /// One styled section of a [`Value::Formatted`] value.
@@ -49,6 +68,10 @@ impl Value {
             Value::Object(_) => "object",
             Value::Image { .. } => "resolvedImage",
             Value::Formatted(_) => "formatted",
+            Value::NumberArray(_) => "numberArray",
+            Value::ColorArray(_) => "colorArray",
+            Value::Padding(_) => "padding",
+            Value::Projection(_) => "projectionDefinition",
         }
     }
 
@@ -122,6 +145,20 @@ impl fmt::Display for Value {
                 }
                 Ok(())
             }
+            Value::NumberArray(v) => {
+                let parts: Vec<String> = v.iter().map(|n| format_number(*n)).collect();
+                write!(f, "{}", parts.join(","))
+            }
+            Value::ColorArray(v) => {
+                let parts: Vec<String> = v.iter().map(|c| c.to_string()).collect();
+                write!(f, "{}", parts.join(","))
+            }
+            Value::Padding(v) => {
+                let parts: Vec<String> = v.iter().map(|n| format_number(*n)).collect();
+                write!(f, "{}", parts.join(","))
+            }
+            Value::Projection(Projection::Named(s)) => write!(f, "{s}"),
+            Value::Projection(_) => write!(f, "{self:?}"),
         }
     }
 }

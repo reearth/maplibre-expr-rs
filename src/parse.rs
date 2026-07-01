@@ -282,6 +282,7 @@ fn parse_interpolate(space: InterpSpace, args: &[Json]) -> Result<Expr> {
         space,
         input: Box::new(input),
         stops,
+        projection: false,
     })
 }
 

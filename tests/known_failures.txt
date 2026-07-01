@@ -1,7 +1,8 @@
-# Fixtures not yet passing, reported as `ignored` by the spec harness. Grouped
-# by reason so it doubles as a roadmap. Nothing is skipped silently.
-
-# === Locale builtins not yet implemented (collator/number-format/resolved-locale).  (21 fixtures) ===
+# Fixtures not yet passing, reported as `ignored` by the spec harness.
+# Remaining: locale builtins (collator/number-format/resolved-locale) and a
+# few coalesce/enum/constant-folding edge cases.
+coalesce/error
+coalesce/inference
 collator/accent-equals-de
 collator/accent-lt-en
 collator/accent-not-equals-en
@@ -18,31 +19,13 @@ collator/variable-lteq
 collator/variable-not-equals
 collator/variant-equals-en
 collator/variant-gteq-en
+constant-folding/evaluation-error
+equal/collator-value
+format/implicit-omit
+get/from-literal--missing
+legacy/identity/enum
 number-format/currency
 number-format/default
 number-format/precision
 number-format/unit
 resolved-locale/basic
-
-# === Compile-time checks needing constant-folding, or collator-dependent.  (5 fixtures) ===
-constant-folding/evaluation-error
-equal/collator-value
-get/from-literal--missing
-interpolate-hcl/linear-color-array
-interpolate-lab/linear-color-array
-
-# === Special typed values (Padding, NumberArray, ColorArray,
-# ProjectionDefinition, enum) eval does not yet fully construct/coerce.  (13 fixtures) ===
-coalesce/error
-coalesce/inference
-format/implicit-omit
-interpolate/linear-color-array
-interpolate/linear-number-array
-interpolate/projection/higher-than-stop
-interpolate/projection/linear
-interpolate/projection/lower-than-stop
-interpolate/projection/same-from-to
-legacy/identity/color_array
-legacy/identity/enum
-legacy/identity/number_array
-legacy/identity/padding

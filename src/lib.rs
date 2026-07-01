@@ -44,7 +44,7 @@ pub use color::Color;
 pub use context::{EvaluationContext, Feature};
 pub use error::{EvalError, ParseError};
 pub use typ::Type;
-pub use value::Value;
+pub use value::{Projection, Value};
 
 /// Parse a MapLibre expression from its JSON representation.
 pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {

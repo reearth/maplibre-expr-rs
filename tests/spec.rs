@@ -709,6 +709,23 @@ fn value_to_json(value: &Value) -> Json {
         Value::Image { name, available } => {
             serde_json::json!({ "name": name, "available": available })
         }
+        Value::NumberArray(v) => serde_json::json!({ "values": v }),
+        Value::Padding(v) => serde_json::json!({ "values": v }),
+        Value::ColorArray(v) => {
+            let colors: Vec<Json> = v
+                .iter()
+                .map(|c| serde_json::json!({"r": c.r, "g": c.g, "b": c.b, "a": c.a}))
+                .collect();
+            serde_json::json!({ "values": colors })
+        }
+        Value::Projection(p) => match p {
+            maplibre_expr::Projection::Named(s) => Json::String(s.clone()),
+            maplibre_expr::Projection::Transition {
+                from,
+                to,
+                transition,
+            } => serde_json::json!({ "from": from, "to": to, "transition": transition }),
+        },
         Value::Formatted(sections) => {
             let secs: Vec<Json> = sections
                 .iter()

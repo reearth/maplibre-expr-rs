@@ -69,6 +69,10 @@ impl Type {
             Value::Object(_) => Type::Object,
             Value::Image { .. } => Type::ResolvedImage,
             Value::Formatted(_) => Type::Formatted,
+            Value::NumberArray(_) => Type::NumberArray,
+            Value::ColorArray(_) => Type::ColorArray,
+            Value::Padding(_) => Type::Padding,
+            Value::Projection(_) => Type::ProjectionDefinition,
             Value::Array(items) => {
                 let mut item_type: Option<Type> = None;
                 for it in items {

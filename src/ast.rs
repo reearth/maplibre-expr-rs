@@ -39,6 +39,9 @@ pub enum Expr {
         space: InterpSpace,
         input: Box<Expr>,
         stops: Vec<(f64, Expr)>,
+        /// Set when the output type is `projectionDefinition`, which is
+        /// interpolated specially (stop outputs stay raw).
+        projection: bool,
     },
     /// `["format", content, options?, ...]` — styled text sections.
     Format(Vec<FormatArg>),
