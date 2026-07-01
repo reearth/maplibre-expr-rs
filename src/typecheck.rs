@@ -493,9 +493,9 @@ impl Checker {
             "slice" => {
                 let (input, t) = self.infer(&args[0], None)?;
                 if !matches!(t, Type::Array(..) | Type::String | Type::Value) {
-                    return Err(ParseError::new(format!(
-                        "Expected first argument to be of type array or string, but found {t} instead"
-                    )));
+                    return Err(ParseError::of(ParseErrorKind::SliceFirstArg {
+                        found: t.to_string(),
+                    }));
                 }
                 let mut new_args = vec![input];
                 new_args.extend(self.infer_args(&args[1..])?);
@@ -529,9 +529,9 @@ impl Checker {
             "global-state" => {
                 if !matches!(&args[0], Expr::Literal(Value::String(_))) {
                     let (_, t) = self.infer(&args[0], None)?;
-                    return Err(ParseError::new(format!(
-                        "Global state property must be string, but found {t} instead."
-                    )));
+                    return Err(ParseError::of(ParseErrorKind::GlobalStateProperty {
+                        found: t.to_string(),
+                    }));
                 }
                 mk(self.infer_args(args)?, Type::Value)
             }
@@ -626,9 +626,7 @@ impl Checker {
                 Expr::Literal(Value::String(s)) if s == "string" => Type::String,
                 Expr::Literal(Value::String(s)) if s == "number" => Type::Number,
                 Expr::Literal(Value::String(s)) if s == "boolean" => Type::Boolean,
-                _ => return Err(ParseError::new(
-                    "The item type argument of \"array\" must be one of string, number, boolean",
-                )),
+                _ => return Err(ParseError::of(ParseErrorKind::ArrayItemType).at(1)),
             };
             (t, 1)
         } else {
@@ -641,11 +639,7 @@ impl Checker {
                 Expr::Literal(Value::Number(v)) if *v >= 0.0 && v.fract() == 0.0 => {
                     Some(*v as usize)
                 }
-                _ => {
-                    return Err(ParseError::new(
-                        "The length argument to \"array\" must be a positive integer literal",
-                    ))
-                }
+                _ => return Err(ParseError::of(ParseErrorKind::ArrayLength).at(2)),
             }
         } else {
             None
@@ -781,9 +775,9 @@ impl Checker {
             t,
             Type::Boolean | Type::String | Type::Number | Type::Null | Type::Value
         ) {
-            return Err(ParseError::new(format!(
-                "Expected first argument to be of type boolean, string, number or null, but found {t} instead"
-            )));
+            return Err(ParseError::of(ParseErrorKind::SearchNeedle {
+                found: t.to_string(),
+            }));
         }
         Ok(node)
     }
@@ -876,29 +870,21 @@ fn validate_match_labels(arms: &[(Vec<Value>, Expr)]) -> Result<Option<Type>, Pa
         // Arm `k`'s label list sits at position [2 + 2k] in the original array.
         let pos = 2 + 2 * k;
         if labels.is_empty() {
-            return Err(ParseError::new("Expected at least one branch label.").at(pos));
+            return Err(ParseError::of(ParseErrorKind::BranchLabelsEmpty).at(pos));
         }
         for label in labels {
             let lt = match label {
                 Value::Number(n) => {
                     if n.abs() > MAX_SAFE_INTEGER {
-                        return Err(ParseError::new(
-                            "Branch labels must be integers no larger than 9007199254740991.",
-                        )
-                        .at(pos));
+                        return Err(ParseError::of(ParseErrorKind::BranchLabelTooLarge).at(pos));
                     }
                     if n.fract() != 0.0 {
-                        return Err(ParseError::new(
-                            "Numeric branch labels must be integer values.",
-                        )
-                        .at(pos));
+                        return Err(ParseError::of(ParseErrorKind::BranchLabelNotInteger).at(pos));
                     }
                     Type::Number
                 }
                 Value::String(_) => Type::String,
-                _ => {
-                    return Err(ParseError::new("Branch labels must be numbers or strings.").at(pos))
-                }
+                _ => return Err(ParseError::of(ParseErrorKind::BranchLabelsType).at(pos)),
             };
             match &label_type {
                 None => label_type = Some(lt),
@@ -913,7 +899,7 @@ fn validate_match_labels(arms: &[(Vec<Value>, Expr)]) -> Result<Option<Type>, Pa
             }
             let key = format!("{label:?}");
             if seen.contains(&key) {
-                return Err(ParseError::new("Branch labels must be unique.").at(pos));
+                return Err(ParseError::of(ParseErrorKind::BranchLabelsUnique).at(pos));
             }
             seen.push(key);
         }

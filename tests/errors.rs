@@ -64,3 +64,50 @@ fn type_mismatch_kind() {
     let e = compile_err(json!(["string", ["get", "x"]]), Some(Type::Number));
     assert!(matches!(e.kind, ParseErrorKind::TypeMismatch { .. }));
 }
+
+#[test]
+fn structural_kinds_are_semantic() {
+    // These used to be Other(String); they now have dedicated variants.
+    assert!(matches!(
+        compile_err(json!(["array", 0, ["literal", []]]), None).kind,
+        ParseErrorKind::ArrayItemType
+    ));
+    assert!(matches!(
+        compile_err(json!(["literal", 1, 2]), None).kind,
+        ParseErrorKind::RequiresExactlyOneArg { .. }
+    ));
+    assert!(matches!(
+        compile_err(json!({}), None).kind,
+        ParseErrorKind::BareObject
+    ));
+    assert!(matches!(
+        compile_err(json!(["match", ["get", "x"], true, "a", "d"]), None).kind,
+        ParseErrorKind::BranchLabelsType
+    ));
+}
+
+#[test]
+fn eval_error_kinds_are_semantic() {
+    use maplibre_expr::{evaluate, EvalErrorKind, EvaluationContext, Feature, Value};
+    use std::collections::BTreeMap;
+    // Feature-dependent so it isn't constant-folded away at compile time.
+    let mut props = BTreeMap::new();
+    props.insert("c".to_string(), Value::String("not-a-color".into()));
+    props.insert("i".to_string(), Value::Number(-1.0));
+    let ctx = EvaluationContext::new().with_feature(Feature {
+        properties: props,
+        ..Default::default()
+    });
+    let eval_err = |expr: serde_json::Value| {
+        let e = typecheck(&parse(&expr).unwrap(), None, false).unwrap();
+        evaluate(&e, &ctx).unwrap_err()
+    };
+    assert!(matches!(
+        eval_err(json!(["to-color", ["get", "c"]])).kind,
+        EvalErrorKind::CouldNotParse { ty: "color", .. }
+    ));
+    assert!(matches!(
+        eval_err(json!(["at", ["get", "i"], ["literal", [1, 2]]])).kind,
+        EvalErrorKind::ArrayIndexNegative { .. }
+    ));
+}

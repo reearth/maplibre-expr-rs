@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
 use crate::color::Color;
 use crate::context::EvaluationContext;
-use crate::error::EvalError;
+use crate::error::{EvalError, EvalErrorKind};
 use crate::ext::{NativeFn, Options, MAX_CALL_DEPTH};
 use crate::typ::{is_subtype, Type};
 use crate::value::{FormatSection, Value};
@@ -277,9 +277,10 @@ impl Evaluator<'_> {
         match self.eval(expr)? {
             Value::String(s) => match Color::parse(&s) {
                 Some(c) => Ok(Value::Color(c)),
-                None => Err(EvalError::new(format!(
-                    "Could not parse color from value '{s}'"
-                ))),
+                None => Err(EvalError::of(EvalErrorKind::CouldNotParse {
+                    ty: "color",
+                    value: s.clone(),
+                })),
             },
             other => Ok(other),
         }
@@ -555,21 +556,16 @@ impl Evaluator<'_> {
         // Order mirrors MapLibre's `At`: negative, then out-of-range, then
         // non-integer — each with its own message.
         if index < 0.0 {
-            return Err(EvalError::new(format!(
-                "Array index out of bounds: {index} < 0."
-            )));
+            return Err(EvalError::of(EvalErrorKind::ArrayIndexNegative { index }));
         }
         if index >= array.len() as f64 {
-            return Err(EvalError::new(format!(
-                "Array index out of bounds: {} > {}.",
+            return Err(EvalError::of(EvalErrorKind::ArrayIndexOutOfBounds {
                 index,
-                array.len().saturating_sub(1)
-            )));
+                max: array.len().saturating_sub(1),
+            }));
         }
         if index != index.trunc() {
-            return Err(EvalError::new(format!(
-                "Array index must be an integer, but found {index} instead."
-            )));
+            return Err(EvalError::of(EvalErrorKind::ArrayIndexNotInteger { index }));
         }
         Ok(array[index as usize].clone())
     }
@@ -725,11 +721,11 @@ impl Evaluator<'_> {
             // types disagree or aren't ordered — MapLibre's combined-signature
             // error.
             _ => {
-                return Err(EvalError::new(format!(
-                    "Expected arguments for \"{op}\" to be (string, string) or (number, number), but found ({}, {}) instead.",
-                    runtime_type_str(&a),
-                    runtime_type_str(&b)
-                )))
+                return Err(EvalError::of(EvalErrorKind::NotOrderedComparable {
+                    op: op.to_string(),
+                    lhs: runtime_type_str(&a),
+                    rhs: runtime_type_str(&b),
+                }))
             }
         };
         Ok(Value::Bool(result))
@@ -907,10 +903,9 @@ impl Evaluator<'_> {
                 _ => {}
             }
         }
-        Err(EvalError::new(format!(
-            "Could not convert {} to number.",
-            json_stringify(&last)
-        )))
+        Err(EvalError::of(EvalErrorKind::CouldNotConvertToNumber {
+            value: json_stringify(&last),
+        }))
     }
 
     fn op_to_color(&mut self, args: &[Expr]) -> Result<Value> {
@@ -923,14 +918,14 @@ impl Evaluator<'_> {
         }
         Err(match &last {
             // An array of the wrong length/shape has its own message.
-            Value::Array(_) => EvalError::new(format!(
-                "Invalid rgba value {}: expected an array containing either three or four numeric values.",
-                json_stringify(&last)
-            )),
-            other => EvalError::new(format!(
-                "Could not parse color from value '{}'",
-                coercion_value_repr(other)
-            )),
+            Value::Array(_) => EvalError::of(EvalErrorKind::InvalidRgba {
+                value: json_stringify(&last),
+                reason: "expected an array containing either three or four numeric values.",
+            }),
+            other => EvalError::of(EvalErrorKind::CouldNotParse {
+                ty: "color",
+                value: coercion_value_repr(other),
+            }),
         })
     }
 
@@ -961,16 +956,16 @@ impl Evaluator<'_> {
             format!("[{}, {}, {}, {}]", f(r), f(g), f(b), f(a))
         };
         if [r, g, b].iter().any(|v| !(0.0..=255.0).contains(v)) {
-            return Err(EvalError::new(format!(
-                "Invalid rgba value {}: 'r', 'g', and 'b' must be between 0 and 255.",
-                rgba()
-            )));
+            return Err(EvalError::of(EvalErrorKind::InvalidRgba {
+                value: rgba(),
+                reason: "'r', 'g', and 'b' must be between 0 and 255.",
+            }));
         }
         if !(0.0..=1.0).contains(&a) {
-            return Err(EvalError::new(format!(
-                "Invalid rgba value {}: 'a' must be between 0 and 1.",
-                rgba()
-            )));
+            return Err(EvalError::of(EvalErrorKind::InvalidRgba {
+                value: rgba(),
+                reason: "'a' must be between 0 and 1.",
+            }));
         }
         Ok(Value::Color(Color::from_rgba8(r, g, b, a)))
     }
@@ -1152,19 +1147,21 @@ fn coerce_value(ty: &Type, v: Value) -> Result<Value> {
                 if t.is_empty() {
                     Ok(Value::Number(0.0))
                 } else {
-                    t.parse::<f64>()
-                        .map(Value::Number)
-                        .map_err(|_| EvalError::new(format!("Could not convert {t} to number.")))
+                    t.parse::<f64>().map(Value::Number).map_err(|_| {
+                        EvalError::of(EvalErrorKind::CouldNotConvertToNumber {
+                            value: t.to_string(),
+                        })
+                    })
                 }
             }
             _ => Err(type_error("number", &v)),
         },
         Type::Color => match coerce_color(&v) {
             Some(c) => Ok(Value::Color(c)),
-            None => Err(EvalError::new(format!(
-                "Could not parse color from value '{}'",
-                coercion_value_repr(&v)
-            ))),
+            None => Err(EvalError::of(EvalErrorKind::CouldNotParse {
+                ty: "color",
+                value: coercion_value_repr(&v),
+            })),
         },
         Type::Formatted => Ok(match v {
             Value::Formatted(_) => v,
@@ -1200,19 +1197,19 @@ fn coerce_number_array(v: Value) -> Result<Value> {
             }
             Ok(Value::NumberArray(out))
         }
-        _ => Err(EvalError::new(format!(
-            "Could not parse numberArray from value '{}'",
-            coercion_value_repr(&v)
-        ))),
+        _ => Err(EvalError::of(EvalErrorKind::CouldNotParse {
+            ty: "numberArray",
+            value: coercion_value_repr(&v),
+        })),
     }
 }
 
 fn coerce_padding(v: Value) -> Result<Value> {
     let err = || {
-        EvalError::new(format!(
-            "Could not parse padding from value '{}'",
-            coercion_value_repr(&v)
-        ))
+        EvalError::of(EvalErrorKind::CouldNotParse {
+            ty: "padding",
+            value: coercion_value_repr(&v),
+        })
     };
     match &v {
         Value::Padding(_) => Ok(v),
@@ -1235,10 +1232,10 @@ fn coerce_padding(v: Value) -> Result<Value> {
 
 fn coerce_color_array(v: Value) -> Result<Value> {
     let err = || {
-        EvalError::new(format!(
-            "Could not parse colorArray from value '{}'",
-            coercion_value_repr(&v)
-        ))
+        EvalError::of(EvalErrorKind::CouldNotParse {
+            ty: "colorArray",
+            value: coercion_value_repr(&v),
+        })
     };
     match &v {
         Value::ColorArray(_) => Ok(v),
@@ -1271,14 +1268,15 @@ fn coerce_projection(v: Value) -> Result<Value> {
                 to: to.to_string(),
                 transition: t,
             })),
-            _ => Err(EvalError::new(format!(
-                "Could not parse projection from value '{}'",
-                coercion_value_repr(&v)
-            ))),
+            _ => Err(EvalError::of(EvalErrorKind::CouldNotParse {
+                ty: "projection",
+                value: coercion_value_repr(&v),
+            })),
         },
-        _ => Err(EvalError::new(format!(
-            "Could not parse projection from value '{v}'"
-        ))),
+        _ => Err(EvalError::of(EvalErrorKind::CouldNotParse {
+            ty: "projection",
+            value: coercion_value_repr(&v),
+        })),
     }
 }
 
@@ -1286,10 +1284,9 @@ fn coerce_projection(v: Value) -> Result<Value> {
 fn require_searchable_needle(needle: &Value) -> Result<()> {
     match needle {
         Value::Bool(_) | Value::String(_) | Value::Number(_) | Value::Null => Ok(()),
-        other => Err(EvalError::new(format!(
-            "Expected first argument to be of type boolean, string, number or null, but found {} instead.",
-            other.type_name()
-        ))),
+        other => Err(EvalError::of(EvalErrorKind::SearchNeedle {
+            found: other.type_name().to_string(),
+        })),
     }
 }
 

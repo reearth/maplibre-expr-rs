@@ -56,8 +56,9 @@ location path of the offending sub-expression (e.g. `"[2]"` or `"[4][0]"`),
 collected as the error bubbles up. Both the message text and the location key
 match the reference implementation **byte-for-byte** across the conformance
 suite, and the harness enforces this (see [Conformance testing](#conformance-testing)).
-An `Other` kind still backs a few structural checks that lack a dedicated
-variant.
+Most causes have a dedicated variant (`CouldNotParse`, `ArrayIndexOutOfBounds`,
+`InvalidRgba`, `BranchLabels*`, …); an `Other` kind backs only the remaining
+one-off structural shape checks (e.g. malformed interpolation-type arrays).
 
 ## Extensions: macros and functions
 
