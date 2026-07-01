@@ -47,12 +47,16 @@ incompatible types, malformed `match` branches, non-interpolatable
 `interpolate` outputs, bad `array` item-type/length arguments, and misuse of
 `zoom` outside a single top-level curve.
 
-**Error messages are not reproduced (yet).** The pass detects the *same error
-conditions* as the reference implementation — logically, the same expressions
-are rejected — but the returned `ParseError` text is our own and does not match
-MapLibre's wording. Message-for-message parity is future work; today the
-conformance suite only checks *whether* an expression compiles, not the error
-string.
+**Errors are semantic.** `ParseError`/`EvalError` carry a `kind`
+([`ParseErrorKind`]/[`EvalErrorKind`]) you can match on — `UnknownExpression`,
+`WrongArgCount`, `TypeMismatch`, `NotComparable`, `CannotCompare`,
+`NotInterpolatable`, `UnboundVariable`, `Zoom`, … — with a `Display` "printer"
+rendering the message. `ParseError` also carries a `key`, the location path of
+the offending sub-expression (e.g. `"[2]"`), collected as the error bubbles up,
+mirroring the reference implementation's error keys. Message *text* is not yet
+guaranteed to match MapLibre's wording verbatim (the conformance suite checks
+*whether* an expression compiles, not the string); an `Other` kind still backs
+the less-common structural checks.
 
 ## Extensions: macros and functions
 

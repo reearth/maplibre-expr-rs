@@ -13,7 +13,7 @@
 //! expected).
 
 use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
-use crate::error::ParseError;
+use crate::error::{ParseError, ParseErrorKind};
 use crate::typ::{is_subtype, Type};
 use crate::value::Value;
 
@@ -119,7 +119,7 @@ impl Checker {
                     .rev()
                     .find(|(n, _)| n == name)
                     .map(|(_, t)| t.clone())
-                    .ok_or_else(|| ParseError::new(format!("Unknown variable \"{name}\".")))?;
+                    .ok_or_else(|| ParseError::of(ParseErrorKind::UnboundVariable(name.clone())))?;
                 Ok((Expr::Var(name.clone()), ty))
             }
             Expr::Let { bindings, body } => self.infer_let(bindings, body, expected),
@@ -268,9 +268,10 @@ impl Checker {
         let (input_node, input_type) = self.infer(input, Some(&Type::Value))?;
         if let Some(lt) = &label_type {
             if !matches!(input_type, Type::Value) && !is_subtype(lt, &input_type) {
-                return Err(ParseError::new(format!(
-                    "Expected {lt} but found {input_type} instead."
-                )));
+                return Err(ParseError::of(ParseErrorKind::TypeMismatch {
+                    expected: lt.to_string(),
+                    found: input_type.to_string(),
+                }));
             }
         }
         Ok((
@@ -355,8 +356,8 @@ impl Checker {
         }
         let out = output_type.unwrap_or(Type::Value);
         if !is_interpolatable(&out) {
-            return Err(ParseError::new(format!(
-                "Type {out} is not interpolatable."
+            return Err(ParseError::of(ParseErrorKind::NotInterpolatable(
+                out.to_string(),
             )));
         }
         Ok((
@@ -527,15 +528,17 @@ impl Checker {
         let (rhs, rt) = self.infer(&args[1], None)?;
         for t in [&lt, &rt] {
             if !is_comparable(op, t) {
-                return Err(ParseError::new(format!(
-                    "\"{op}\" comparisons are not supported for type '{t}'."
-                )));
+                return Err(ParseError::of(ParseErrorKind::NotComparable {
+                    op: op.to_string(),
+                    ty: t.to_string(),
+                }));
             }
         }
         if lt.kind() != rt.kind() && !matches!(lt, Type::Value) && !matches!(rt, Type::Value) {
-            return Err(ParseError::new(format!(
-                "Cannot compare types '{lt}' and '{rt}'."
-            )));
+            return Err(ParseError::of(ParseErrorKind::CannotCompare {
+                lhs: lt.to_string(),
+                rhs: rt.to_string(),
+            }));
         }
         let mut new_args = vec![lhs, rhs];
         if let Some(third) = args.get(2) {
@@ -668,9 +671,10 @@ impl Checker {
             return Ok((node, actual));
         }
         if !is_subtype(exp, &actual) {
-            return Err(ParseError::new(format!(
-                "Expected {exp} but found {actual} instead."
-            )));
+            return Err(ParseError::of(ParseErrorKind::TypeMismatch {
+                expected: exp.to_string(),
+                found: actual.to_string(),
+            }));
         }
         Ok((node, actual))
     }
@@ -786,9 +790,10 @@ fn reconcile(node: Expr, actual: Type, expected: Option<&Type>, coerce_string: b
         return Ok((wrap(exp.clone(), node, true), exp.clone()));
     }
     if !is_subtype(exp, &actual) {
-        return Err(ParseError::new(format!(
-            "Expected {exp} but found {actual} instead."
-        )));
+        return Err(ParseError::of(ParseErrorKind::TypeMismatch {
+            expected: exp.to_string(),
+            found: actual.to_string(),
+        }));
     }
     Ok((node, actual))
 }
@@ -833,9 +838,10 @@ fn validate_match_labels(arms: &[(Vec<Value>, Expr)]) -> Result<Option<Type>, Pa
                 None => label_type = Some(lt),
                 Some(existing) if *existing == lt => {}
                 Some(existing) => {
-                    return Err(ParseError::new(format!(
-                        "Expected {existing} but found {lt} instead."
-                    )))
+                    return Err(ParseError::of(ParseErrorKind::TypeMismatch {
+                        expected: existing.to_string(),
+                        found: lt.to_string(),
+                    }))
                 }
             }
             let key = format!("{label:?}");
@@ -879,9 +885,9 @@ fn is_interpolatable(t: &Type) -> bool {
 fn check_zoom_usage(expr: &Expr) -> Result<(), ParseError> {
     let curve = find_zoom_curve(expr)?;
     if curve.is_none() && references_zoom(expr) {
-        return Err(ParseError::new(
+        return Err(ParseError::of(ParseErrorKind::Zoom(
             "\"zoom\" expression may only be used as input to a top-level \"step\" or \"interpolate\" expression.",
-        ));
+        )));
     }
     Ok(())
 }
@@ -913,14 +919,14 @@ fn find_zoom_curve(expr: &Expr) -> Result<Option<CurveId>, ParseError> {
         let child_result = find_zoom_curve(child)?;
         match (result, child_result) {
             (None, Some(_)) => {
-                return Err(ParseError::new(
+                return Err(ParseError::of(ParseErrorKind::Zoom(
                     "\"zoom\" expression may only be used as input to a top-level \"step\" or \"interpolate\" expression.",
-                ));
+                )));
             }
             (Some(a), Some(b)) if a != b => {
-                return Err(ParseError::new(
+                return Err(ParseError::of(ParseErrorKind::Zoom(
                     "Only one zoom-based \"step\" or \"interpolate\" subexpression may be used in an expression.",
-                ));
+                )));
             }
             _ => {}
         }

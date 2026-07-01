@@ -1021,10 +1021,10 @@ fn type_string(v: &Value) -> String {
 }
 
 fn type_error(expected: &str, found: &Value) -> EvalError {
-    EvalError::new(format!(
-        "Expected value to be of type {expected}, but found {} instead.",
-        found.type_name()
-    ))
+    EvalError::of(crate::error::EvalErrorKind::TypeMismatch {
+        expected: expected.to_string(),
+        found: found.type_name().to_string(),
+    })
 }
 
 /// A type-directed runtime assertion (`Expr::Assert`): the value must already

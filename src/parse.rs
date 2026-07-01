@@ -4,7 +4,7 @@ use serde_json::Value as Json;
 
 use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
 use crate::distance::SimpleGeom;
-use crate::error::ParseError;
+use crate::error::{ParseError, ParseErrorKind};
 use crate::ext::{Options, MAX_MACRO_DEPTH};
 use crate::value::Value;
 
@@ -24,9 +24,13 @@ pub fn parse(json: &Json, opts: &Options) -> Result<Expr> {
     }
 }
 
-/// Parse each element of `args` as an expression.
+/// Parse each element of `args` as an expression, tagging errors with the
+/// argument's location (its index in the enclosing array).
 fn parse_all(args: &[Json], opts: &Options) -> Result<Vec<Expr>> {
-    args.iter().map(|a| parse(a, opts)).collect()
+    args.iter()
+        .enumerate()
+        .map(|(i, a)| parse(a, opts).map_err(|e| e.at(i + 1)))
+        .collect()
 }
 
 fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
@@ -161,18 +165,20 @@ fn check_generic_arity(op: &str, argc: usize) -> Result<()> {
         return Ok(());
     }
 
-    let range =
-        arity(op).ok_or_else(|| ParseError::new(format!("Unknown expression name \"{op}\".")))?;
+    let range = arity(op)
+        .ok_or_else(|| ParseError::of(ParseErrorKind::UnknownExpression(op.to_string())))?;
     let (min, max) = range;
     if argc < min || max.is_some_and(|m| argc > m) {
-        return Err(ParseError::new(format!(
-            "Wrong number of arguments to '{op}': expected {}, found {argc}.",
-            match max {
-                Some(m) if m == min => format!("{min}"),
-                Some(m) => format!("{min}..={m}"),
-                None => format!("at least {min}"),
-            }
-        )));
+        let expected = match max {
+            Some(m) if m == min => format!("{min}"),
+            Some(m) => format!("{min}..={m}"),
+            None => format!("at least {min}"),
+        };
+        return Err(ParseError::of(ParseErrorKind::WrongArgCount {
+            op: op.to_string(),
+            expected,
+            found: argc,
+        }));
     }
     Ok(())
 }

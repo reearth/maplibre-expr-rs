@@ -43,7 +43,7 @@ mod value;
 pub use ast::{Expr, InterpKind, InterpSpace};
 pub use color::Color;
 pub use context::{EvaluationContext, Feature};
-pub use error::{EvalError, ParseError};
+pub use error::{EvalError, EvalErrorKind, ParseError, ParseErrorKind};
 pub use ext::{Function, Macro, Options};
 pub use typ::Type;
 pub use value::{Projection, Value};
