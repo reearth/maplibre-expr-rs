@@ -479,7 +479,11 @@ impl Checker {
 
             "at" => {
                 let (idx, _) = self.infer_at(&args[0], None, 1)?;
-                let (arr, arr_ty) = self.infer_at(&args[1], None, 2)?;
+                // Propagate the expected element type down: `at` into an
+                // `array<expected>`, so a type-mismatch is reported against the
+                // array argument (MapLibre's behaviour).
+                let arr_expected = concrete(expected).map(|t| Type::array(t, None));
+                let (arr, arr_ty) = self.infer_at(&args[1], arr_expected.as_ref(), 2)?;
                 let item = match arr_ty {
                     Type::Array(item, _) => *item,
                     _ => Type::Value,
@@ -743,28 +747,29 @@ impl Checker {
 
     fn infer_format(&mut self, sections: &[FormatArg]) -> R {
         let mut new_sections = Vec::with_capacity(sections.len());
-        for s in sections {
-            let (content, ct) = self.infer(&s.content, Some(&Type::Value))?;
+        // Section `i`'s content — and its options — are keyed at [1 + 2i].
+        for (i, s) in sections.iter().enumerate() {
+            let sec = 1 + 2 * i;
+            let (content, ct) = self.infer_at(&s.content, Some(&Type::Value), sec)?;
             if !matches!(
                 ct,
                 Type::String | Type::Value | Type::Null | Type::ResolvedImage
             ) {
                 return Err(ParseError::new(
                     "Formatted text type must be 'string', 'value', 'image' or 'null'.",
-                ));
+                )
+                .at(sec));
             }
-            let mut opt = |e: &Option<Expr>, ty: Type| -> Result<Option<Expr>, ParseError> {
-                match e {
-                    Some(e) => Ok(Some(self.infer(e, Some(&ty))?.0)),
-                    None => Ok(None),
-                }
+            let opt = |this: &mut Self, e: &Option<Expr>, ty: Type| match e {
+                Some(e) => Ok(Some(this.infer_at(e, Some(&ty), sec)?.0)),
+                None => Ok::<_, ParseError>(None),
             };
             new_sections.push(FormatArg {
                 content,
-                scale: opt(&s.scale, Type::Number)?,
-                font: opt(&s.font, Type::array(Type::String, None))?,
-                text_color: opt(&s.text_color, Type::Color)?,
-                vertical_align: opt(&s.vertical_align, Type::String)?,
+                scale: opt(self, &s.scale, Type::Number)?,
+                font: opt(self, &s.font, Type::array(Type::String, None))?,
+                text_color: opt(self, &s.text_color, Type::Color)?,
+                vertical_align: opt(self, &s.vertical_align, Type::String)?,
             });
         }
         Ok((Expr::Format(new_sections), Type::Formatted))
@@ -811,7 +816,7 @@ fn reconcile(node: Expr, actual: Type, expected: Option<&Type>, coerce_string: b
     );
     if assertable && matches!(actual, Type::Value) {
         let coerce = coerce_string && matches!(exp, Type::String);
-        return Ok((wrap(exp.clone(), node, coerce), exp.clone()));
+        return Ok((fold_constant(wrap(exp.clone(), node, coerce))?, exp.clone()));
     }
     let coerce = match exp {
         Type::ProjectionDefinition => matches!(actual, Type::String | Type::Array(..)),
@@ -826,7 +831,7 @@ fn reconcile(node: Expr, actual: Type, expected: Option<&Type>, coerce_string: b
         _ => false,
     };
     if coerce {
-        return Ok((wrap(exp.clone(), node, true), exp.clone()));
+        return Ok((fold_constant(wrap(exp.clone(), node, true))?, exp.clone()));
     }
     if !is_subtype(exp, &actual) {
         return Err(ParseError::of(ParseErrorKind::TypeMismatch {
@@ -835,6 +840,22 @@ fn reconcile(node: Expr, actual: Type, expected: Option<&Type>, coerce_string: b
         }));
     }
     Ok((node, actual))
+}
+
+/// Eagerly evaluate a just-wrapped constant coercion/assertion so a bad literal
+/// (e.g. a non-color string where a color is required) is reported now — with
+/// the caller's location key — mirroring MapLibre's parse-time constant folding.
+/// (A whole-tree fold still runs later for non-annotated constants.)
+fn fold_constant(node: Expr) -> Result<Expr, ParseError> {
+    if is_constant(&node) {
+        if let Err(e) = crate::eval::eval(&node, &crate::context::EvaluationContext::default()) {
+            let msg = e.to_string();
+            if !msg.starts_with("Unimplemented operator") {
+                return Err(ParseError::new(msg));
+            }
+        }
+    }
+    Ok(node)
 }
 
 /// The expectation to pass to output sub-expressions: a concrete expected type,

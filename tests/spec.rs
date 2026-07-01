@@ -17,9 +17,11 @@
 //!
 //! ## Scope note
 //!
-//! This harness verifies `compiled.result` (success vs. error) and the
-//! per-input `outputs`. It does **not** assert the other static-analysis fields
-//! (`type`, `isFeatureConstant`, `isZoomConstant`).
+//! This harness verifies `compiled.result` (success vs. error), the per-input
+//! `outputs`, and error-message/location-`key` parity against the fixtures'
+//! `expected.compiled.errors` / `outputs[i].error`. It does **not** assert the
+//! other static-analysis fields (`type`, `isFeatureConstant`, `isZoomConstant`).
+//! Run with `PARITY=1` for an error-parity coverage report instead.
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -678,7 +680,31 @@ fn run_fixture(path: &Path) -> Result<(), Failed> {
 
     if compiled_result == "error" {
         return match compiled {
-            Err(_) => Ok(()),
+            // Also enforce message + location-key parity against the first
+            // expected error (see the PARITY assessment mode).
+            Err(e) => {
+                let want = expected
+                    .get("compiled")
+                    .and_then(|c| c.get("errors"))
+                    .and_then(Json::as_array)
+                    .and_then(|a| a.first());
+                if let Some(wmsg) = want.and_then(|w| w.get("error")).and_then(Json::as_str) {
+                    if e.to_string() != wmsg {
+                        return Err(format!(
+                            "error message mismatch:\n  want: {wmsg}\n  got:  {e}"
+                        )
+                        .into());
+                    }
+                }
+                if let Some(wkey) = want.and_then(|w| w.get("key")).and_then(Json::as_str) {
+                    if e.key != wkey {
+                        return Err(
+                            format!("error key mismatch: want {wkey:?}, got {:?}", e.key).into(),
+                        );
+                    }
+                }
+                Ok(())
+            }
             Ok(_) => {
                 Err("expected a compile error, but the expression compiled successfully".into())
             }
@@ -728,14 +754,22 @@ fn run_fixture(path: &Path) -> Result<(), Failed> {
                     );
                 }
             }
-            Err(e) => {
-                if expected_output.get("error").is_none() {
+            Err(e) => match expected_output.get("error").and_then(Json::as_str) {
+                None => {
                     return Err(format!(
                         "input #{i}: expected {expected_output}, got evaluation error: {e}"
                     )
                     .into());
                 }
-            }
+                // Enforce evaluation-error message parity.
+                Some(want) if e.to_string() != want => {
+                    return Err(format!(
+                        "input #{i}: error message mismatch:\n  want: {want}\n  got:  {e}"
+                    )
+                    .into());
+                }
+                Some(_) => {}
+            },
         }
     }
 

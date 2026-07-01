@@ -676,19 +676,24 @@ fn parse_format(args: &[Json], opts: &Options) -> Result<Expr> {
     }
     let mut sections: Vec<FormatArg> = Vec::new();
     let mut next_may_be_object = false;
-    for arg in args {
+    // A section's options (text-font, font-scale, ...) are keyed at the
+    // section's content position, not the options-object position.
+    let mut content_pos = 1;
+    for (j, arg) in args.iter().enumerate() {
+        let pos = j + 1;
         if next_may_be_object && arg.is_object() {
             next_may_be_object = false;
             let obj = arg.as_object().unwrap();
+            let sec = content_pos;
             let section = sections.last_mut().unwrap();
             if let Some(v) = obj.get("font-scale") {
-                section.scale = Some(parse(v, opts)?);
+                section.scale = Some(parse(v, opts).map_err(|e| e.at(sec))?);
             }
             if let Some(v) = obj.get("text-font") {
-                section.font = Some(parse(v, opts)?);
+                section.font = Some(parse(v, opts).map_err(|e| e.at(sec))?);
             }
             if let Some(v) = obj.get("text-color") {
-                section.text_color = Some(parse(v, opts)?);
+                section.text_color = Some(parse(v, opts).map_err(|e| e.at(sec))?);
             }
             if let Some(v) = obj.get("vertical-align") {
                 if let Some(s) = v.as_str() {
@@ -698,11 +703,12 @@ fn parse_format(args: &[Json], opts: &Options) -> Result<Expr> {
                         )));
                     }
                 }
-                section.vertical_align = Some(parse(v, opts)?);
+                section.vertical_align = Some(parse(v, opts).map_err(|e| e.at(sec))?);
             }
         } else {
+            content_pos = pos;
             sections.push(FormatArg {
-                content: parse(arg, opts)?,
+                content: parse(arg, opts).map_err(|e| e.at(pos))?,
                 scale: None,
                 font: None,
                 text_color: None,

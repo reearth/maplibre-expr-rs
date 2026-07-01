@@ -47,16 +47,17 @@ incompatible types, malformed `match` branches, non-interpolatable
 `interpolate` outputs, bad `array` item-type/length arguments, and misuse of
 `zoom` outside a single top-level curve.
 
-**Errors are semantic.** `ParseError`/`EvalError` carry a `kind`
-([`ParseErrorKind`]/[`EvalErrorKind`]) you can match on — `UnknownExpression`,
-`WrongArgCount`, `TypeMismatch`, `NotComparable`, `CannotCompare`,
-`NotInterpolatable`, `UnboundVariable`, `Zoom`, … — with a `Display` "printer"
-rendering the message. `ParseError` also carries a `key`, the location path of
-the offending sub-expression (e.g. `"[2]"`), collected as the error bubbles up,
-mirroring the reference implementation's error keys. Message *text* is not yet
-guaranteed to match MapLibre's wording verbatim (the conformance suite checks
-*whether* an expression compiles, not the string); an `Other` kind still backs
-the less-common structural checks.
+**Errors are semantic *and* match MapLibre's wording.** `ParseError`/`EvalError`
+carry a `kind` ([`ParseErrorKind`]/[`EvalErrorKind`]) you can match on —
+`UnknownExpression`, `WrongArgCount`, `TypeMismatch`, `NotComparable`,
+`CannotCompare`, `NotInterpolatable`, `UnboundVariable`, `Zoom`, … — with a
+`Display` "printer" rendering the message. `ParseError` also carries a `key`, the
+location path of the offending sub-expression (e.g. `"[2]"` or `"[4][0]"`),
+collected as the error bubbles up. Both the message text and the location key
+match the reference implementation **byte-for-byte** across the conformance
+suite, and the harness enforces this (see [Conformance testing](#conformance-testing)).
+An `Other` kind still backs a few structural checks that lack a dedicated
+variant.
 
 ## Extensions: macros and functions
 
@@ -135,10 +136,15 @@ it against each `input` and compares to the expected `output`, matching
 the same 6-significant-figure `stripPrecision` rule the upstream suite uses;
 colors are compared premultiplied, matching MapLibre's internal `Color`.
 
-**Scope note:** the harness verifies `compiled.result` (success/error) and the
-per-input `outputs`. It does **not** compare compile-error *messages* (only that
-an error is raised — see [Type checking](#type-checking)), nor assert the other
-static-analysis fields (`type`, `isFeatureConstant`, `isZoomConstant`).
+For error fixtures it also asserts **error parity**: our `ParseError`/`EvalError`
+message text and (for compile errors) the location `key` must match the
+fixture's `expected.compiled.errors[0]` / `outputs[i].error` exactly. Running
+the harness with `PARITY=1` prints a coverage report of message/key agreement
+instead of the pass/fail run.
+
+**Scope note:** the harness verifies `compiled.result` (success/error), the
+per-input `outputs`, and error message/key parity. It does **not** assert the
+other static-analysis fields (`type`, `isFeatureConstant`, `isZoomConstant`).
 
 ### The skip-list
 
