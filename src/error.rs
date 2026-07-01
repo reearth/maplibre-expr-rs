@@ -13,7 +13,8 @@ use std::fmt;
 /// The semantic cause of a parse/compile error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseErrorKind {
-    /// A cause without a dedicated variant yet (structural/shape checks).
+    /// A wrapped runtime error surfaced by compile-time constant folding.
+    /// (Every intrinsic parse error has a dedicated variant below.)
     Other(String),
     /// An unrecognized operator name.
     UnknownExpression(String),
@@ -79,6 +80,59 @@ pub enum ParseErrorKind {
     BranchLabelNotInteger,
     /// A numeric `match` branch label beyond the safe-integer range.
     BranchLabelTooLarge,
+    /// A `within`/`distance` argument was not valid polygon geojson.
+    GeojsonPolygon { op: String },
+    /// A `let` binding name was not a string.
+    LetBindingNameString,
+    /// A `var` binding name was not a string.
+    VarBindingName,
+    /// The `number-format` options argument was not an object.
+    NumberFormatOptionsObject,
+    /// A `format` `vertical-align` option had an invalid value.
+    VerticalAlign { found: String },
+    /// `match`/`step`/`interpolate` given an odd number of arguments.
+    ExpectedEvenArgs { op: &'static str },
+    /// `case` given an even number of arguments.
+    ExpectedOddArgsCase,
+    /// `let` given an even number of arguments.
+    ExpectedOddArgsLet,
+    /// `format` given no sections.
+    FormatAtLeastOne,
+    /// `collator` given other than one argument.
+    CollatorOneArg,
+    /// `number-format` given other than two arguments.
+    NumberFormatTwoArgs,
+    /// An operator taking a fixed count other than one, with wrong arity.
+    ExpectedNArgs { n: usize, found: usize },
+    /// A `format` first argument that was a bare options object.
+    FormatFirstSection,
+    /// A user macro/function/native call with the wrong argument count.
+    ExtArgCount {
+        kind: &'static str,
+        op: String,
+        expected: usize,
+        found: usize,
+    },
+    /// A macro expanded past the recursion-depth limit.
+    MacroDepth { op: String },
+    /// An `interpolate` stop input was not a number literal.
+    InterpolationStopNumber,
+    /// A `step` stop input was not a number literal.
+    StepStopNumber,
+    /// An interpolation type was not an array (e.g. `["linear"]`).
+    InterpolationTypeArray,
+    /// An interpolation type name was not a string.
+    InterpolationTypeName,
+    /// An unrecognized interpolation type.
+    UnknownInterpolationType { name: String },
+    /// A `collator` compared non-string operands.
+    CollatorNonString,
+    /// `slice`/`concat` argument was not a string or array.
+    ExpectedStringOrArray { found: String },
+    /// A `format` section's text was not a valid formatted type.
+    FormattedTextType,
+    /// A `let` variable name contained invalid characters.
+    VariableName,
 }
 
 impl fmt::Display for ParseErrorKind {
@@ -184,6 +238,80 @@ impl fmt::Display for ParseErrorKind {
                 f,
                 "Branch labels must be integers no larger than 9007199254740991."
             ),
+            ParseErrorKind::GeojsonPolygon { op } => write!(
+                f,
+                "'{op}' expression requires valid geojson object that contains polygon geometry type."
+            ),
+            ParseErrorKind::LetBindingNameString => {
+                write!(f, "'let' binding names must be strings.")
+            }
+            ParseErrorKind::VarBindingName => write!(f, "'var' requires a string binding name."),
+            ParseErrorKind::NumberFormatOptionsObject => {
+                write!(f, "'number-format' options must be an object.")
+            }
+            ParseErrorKind::VerticalAlign { found } => write!(
+                f,
+                "'vertical-align' must be one of: 'bottom', 'center', 'top' but found '{found}' instead."
+            ),
+            ParseErrorKind::ExpectedEvenArgs { op } => {
+                write!(f, "Expected an even number of arguments (>= 4) to '{op}'.")
+            }
+            ParseErrorKind::ExpectedOddArgsCase => {
+                write!(f, "Expected an odd number of arguments (>= 3) to 'case'.")
+            }
+            ParseErrorKind::ExpectedOddArgsLet => {
+                write!(f, "Expected an odd number of arguments to 'let'.")
+            }
+            ParseErrorKind::FormatAtLeastOne => {
+                write!(f, "Expected at least one argument to 'format'.")
+            }
+            ParseErrorKind::CollatorOneArg => write!(f, "Expected one argument to 'collator'."),
+            ParseErrorKind::NumberFormatTwoArgs => {
+                write!(f, "Expected two arguments to 'number-format'.")
+            }
+            ParseErrorKind::ExpectedNArgs { n, found } => {
+                write!(f, "Expected {n} arguments, but found {found} instead.")
+            }
+            ParseErrorKind::FormatFirstSection => {
+                write!(f, "First argument to 'format' must be an image or text section.")
+            }
+            ParseErrorKind::ExtArgCount {
+                kind,
+                op,
+                expected,
+                found,
+            } => write!(f, "{kind} '{op}' expects {expected} argument(s), found {found}."),
+            ParseErrorKind::MacroDepth { op } => {
+                write!(f, "Macro expansion too deep expanding '{op}' (recursive macro?).")
+            }
+            ParseErrorKind::InterpolationStopNumber => {
+                write!(f, "Interpolation stop inputs must be numbers.")
+            }
+            ParseErrorKind::StepStopNumber => write!(f, "Step stop inputs must be numbers."),
+            ParseErrorKind::InterpolationTypeArray => {
+                write!(f, "Interpolation type must be an array, e.g. [\"linear\"].")
+            }
+            ParseErrorKind::InterpolationTypeName => {
+                write!(f, "Interpolation type name must be a string.")
+            }
+            ParseErrorKind::UnknownInterpolationType { name } => {
+                write!(f, "Unknown interpolation type \"{name}\".")
+            }
+            ParseErrorKind::CollatorNonString => {
+                write!(f, "Cannot use collator to compare non-string types.")
+            }
+            ParseErrorKind::ExpectedStringOrArray { found } => write!(
+                f,
+                "Expected argument of type string or array, but found {found} instead."
+            ),
+            ParseErrorKind::FormattedTextType => write!(
+                f,
+                "Formatted text type must be 'string', 'value', 'image' or 'null'."
+            ),
+            ParseErrorKind::VariableName => write!(
+                f,
+                "Variable names must contain only alphanumeric characters or '_'."
+            ),
         }
     }
 }
@@ -230,7 +358,8 @@ impl std::error::Error for ParseError {}
 /// The semantic cause of an evaluation error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalErrorKind {
-    /// A cause without a dedicated variant (a few structural/runtime one-offs).
+    /// A message-only error: the user-thrown `["error", msg]` operator, or a
+    /// parse error wrapped while compiling a user function body.
     Other(String),
     /// A value was not of the expected type.
     TypeMismatch { expected: String, found: String },
@@ -263,6 +392,16 @@ pub enum EvalErrorKind {
     },
     /// An `in`/`index-of` needle was not a primitive.
     SearchNeedle { found: String },
+    /// An interpolation produced an uninterpolatable output at runtime.
+    InterpolationOutputs,
+    /// A user function recursed past the call-depth limit.
+    MaxCallDepth { op: String },
+    /// `zoom` used where no zoom is available.
+    ZoomUnavailable,
+    /// An operator MapLibre defines but this crate does not evaluate yet.
+    Unimplemented { op: String },
+    /// An unbound `var` reference at evaluation time.
+    UnknownVariable { name: String },
 }
 
 impl fmt::Display for EvalErrorKind {
@@ -307,6 +446,18 @@ impl fmt::Display for EvalErrorKind {
                 f,
                 "Expected first argument to be of type boolean, string, number or null, but found {found} instead."
             ),
+            EvalErrorKind::InterpolationOutputs => write!(
+                f,
+                "Interpolation outputs must be numbers, colors, or arrays of numbers."
+            ),
+            EvalErrorKind::MaxCallDepth { op } => {
+                write!(f, "Maximum call depth exceeded calling function '{op}'.")
+            }
+            EvalErrorKind::ZoomUnavailable => {
+                write!(f, "The 'zoom' expression is unavailable here.")
+            }
+            EvalErrorKind::Unimplemented { op } => write!(f, "Unimplemented operator \"{op}\"."),
+            EvalErrorKind::UnknownVariable { name } => write!(f, "Unknown variable \"{name}\"."),
         }
     }
 }

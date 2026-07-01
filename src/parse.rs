@@ -51,11 +51,12 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
     }
     if let Some(f) = opts.functions.get(op) {
         if args.len() != f.params.len() {
-            return Err(ParseError::new(format!(
-                "Function '{op}' expects {} argument(s), found {}.",
-                f.params.len(),
-                args.len()
-            )));
+            return Err(ParseError::of(ParseErrorKind::ExtArgCount {
+                kind: "Function",
+                op: op.to_string(),
+                expected: f.params.len(),
+                found: args.len(),
+            }));
         }
         return Ok(Expr::Call {
             op: op.to_string(),
@@ -64,10 +65,12 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
     }
     if let Some((arity, _)) = opts.natives.get(op) {
         if args.len() != *arity {
-            return Err(ParseError::new(format!(
-                "Function '{op}' expects {arity} argument(s), found {}.",
-                args.len()
-            )));
+            return Err(ParseError::of(ParseErrorKind::ExtArgCount {
+                kind: "Function",
+                op: op.to_string(),
+                expected: *arity,
+                found: args.len(),
+            }));
         }
         return Ok(Expr::Call {
             op: op.to_string(),
@@ -85,7 +88,7 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
             expect_arity(op, args, 1)?;
             let name = args[0]
                 .as_str()
-                .ok_or_else(|| ParseError::new("'var' requires a string binding name."))?;
+                .ok_or_else(|| ParseError::of(ParseErrorKind::VarBindingName))?;
             Ok(Expr::Var(name.to_string()))
         }
         "match" => parse_match(args, opts),
@@ -140,18 +143,19 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
 fn expand_macro(op: &str, args: &[Json], opts: &Options) -> Result<Expr> {
     let m = &opts.macros[op];
     if args.len() != m.params.len() {
-        return Err(ParseError::new(format!(
-            "Macro '{op}' expects {} argument(s), found {}.",
-            m.params.len(),
-            args.len()
-        )));
+        return Err(ParseError::of(ParseErrorKind::ExtArgCount {
+            kind: "Macro",
+            op: op.to_string(),
+            expected: m.params.len(),
+            found: args.len(),
+        }));
     }
     use std::sync::atomic::Ordering::Relaxed;
     let depth = opts.depth.load(Relaxed);
     if depth >= MAX_MACRO_DEPTH {
-        return Err(ParseError::new(format!(
-            "Macro expansion too deep expanding '{op}' (recursive macro?)."
-        )));
+        return Err(ParseError::of(ParseErrorKind::MacroDepth {
+            op: op.to_string(),
+        }));
     }
     opts.depth.store(depth + 1, Relaxed);
     let result = (|| {
@@ -209,9 +213,7 @@ fn check_generic_arity(op: &str, argc: usize) -> Result<()> {
     // `case` has an irregular (odd, >= 3) shape.
     if op == "case" {
         if argc < 3 || argc.is_multiple_of(2) {
-            return Err(ParseError::new(
-                "Expected an odd number of arguments (>= 3) to 'case'.",
-            ));
+            return Err(ParseError::of(ParseErrorKind::ExpectedOddArgsCase));
         }
         return Ok(());
     }
@@ -315,16 +317,14 @@ fn arity(op: &str) -> Option<(usize, Option<usize>)> {
 
 fn parse_let(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.is_empty() || args.len().is_multiple_of(2) {
-        return Err(ParseError::new(
-            "Expected an odd number of arguments to 'let'.",
-        ));
+        return Err(ParseError::of(ParseErrorKind::ExpectedOddArgsLet));
     }
     let mut bindings = Vec::new();
     let mut i = 0;
     while i + 1 < args.len() {
         let name = args[i]
             .as_str()
-            .ok_or_else(|| ParseError::new("'let' binding names must be strings."))?;
+            .ok_or_else(|| ParseError::of(ParseErrorKind::LetBindingNameString))?;
         bindings.push((name.to_string(), parse(&args[i + 1], opts)?));
         i += 2;
     }
@@ -343,9 +343,9 @@ fn parse_match(args: &[Json], opts: &Options) -> Result<Expr> {
         }));
     }
     if !args.len().is_multiple_of(2) {
-        return Err(ParseError::new(
-            "Expected an even number of arguments (>= 4) to 'match'.",
-        ));
+        return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs {
+            op: "match",
+        }));
     }
     // Positions: op[0], input[1], label0[2], out0[3], ..., default[len].
     let input = parse(&args[0], opts).map_err(|e| e.at(1))?;
@@ -376,9 +376,9 @@ fn parse_match_labels(json: &Json) -> Result<Vec<Value>> {
 
 fn parse_step(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.len() < 3 || args.len() % 2 == 1 {
-        return Err(ParseError::new(
-            "Expected an even number of arguments (>= 4) to 'step'.",
-        ));
+        return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs {
+            op: "step",
+        }));
     }
     // Positions: op[0], input[1], output0[2], stop[3], output[4], ...
     let input = parse(&args[0], opts).map_err(|e| e.at(1))?;
@@ -388,7 +388,7 @@ fn parse_step(args: &[Json], opts: &Options) -> Result<Expr> {
     while i + 1 < args.len() {
         let stop = args[i]
             .as_f64()
-            .ok_or_else(|| ParseError::new("Step stop inputs must be numbers."))?;
+            .ok_or_else(|| ParseError::of(ParseErrorKind::StepStopNumber))?;
         stops.push((stop, parse(&args[i + 1], opts).map_err(|e| e.at(i + 2))?));
         i += 2;
     }
@@ -402,9 +402,9 @@ fn parse_step(args: &[Json], opts: &Options) -> Result<Expr> {
 
 fn parse_interpolate(space: InterpSpace, args: &[Json], opts: &Options) -> Result<Expr> {
     if args.len() < 4 || args.len() % 2 == 1 {
-        return Err(ParseError::new(
-            "Expected an even number of arguments (>= 4) to 'interpolate'.",
-        ));
+        return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs {
+            op: "interpolate",
+        }));
     }
     // Positions: op[0], kind[1], input[2], stop[3], output[4], ...
     let kind = parse_interp_kind(&args[0]).map_err(|e| e.at(1))?;
@@ -414,7 +414,7 @@ fn parse_interpolate(space: InterpSpace, args: &[Json], opts: &Options) -> Resul
     while i + 1 < args.len() {
         let stop = args[i]
             .as_f64()
-            .ok_or_else(|| ParseError::new("Interpolation stop inputs must be numbers."))?;
+            .ok_or_else(|| ParseError::of(ParseErrorKind::InterpolationStopNumber))?;
         stops.push((stop, parse(&args[i + 1], opts).map_err(|e| e.at(i + 2))?));
         i += 2;
     }
@@ -432,7 +432,7 @@ fn parse_interpolate(space: InterpSpace, args: &[Json], opts: &Options) -> Resul
 /// from a Polygon, MultiPolygon, Feature, or FeatureCollection.
 fn parse_collator(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.len() != 1 {
-        return Err(ParseError::new("Expected one argument to 'collator'."));
+        return Err(ParseError::of(ParseErrorKind::CollatorOneArg));
     }
     let obj = args[0]
         .as_object()
@@ -452,14 +452,12 @@ fn parse_collator(args: &[Json], opts: &Options) -> Result<Expr> {
 
 fn parse_number_format(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.len() != 2 {
-        return Err(ParseError::new(
-            "Expected two arguments to 'number-format'.",
-        ));
+        return Err(ParseError::of(ParseErrorKind::NumberFormatTwoArgs));
     }
     let value = Box::new(parse(&args[0], opts)?);
     let obj = args[1]
         .as_object()
-        .ok_or_else(|| ParseError::new("'number-format' options must be an object."))?;
+        .ok_or_else(|| ParseError::of(ParseErrorKind::NumberFormatOptionsObject))?;
     if obj.contains_key("currency") && obj.contains_key("unit") {
         return Err(ParseError::of(ParseErrorKind::NumberFormatExclusive));
     }
@@ -481,9 +479,9 @@ fn parse_number_format(args: &[Json], opts: &Options) -> Result<Expr> {
 
 fn parse_within(args: &[Json]) -> Result<Expr> {
     let err = || {
-        ParseError::new(
-            "'within' expression requires valid geojson object that contains polygon geometry type.",
-        )
+        ParseError::of(ParseErrorKind::GeojsonPolygon {
+            op: "within".to_string(),
+        })
     };
     if args.len() != 1 {
         return Err(ParseError::of(ParseErrorKind::RequiresExactlyOneArg {
@@ -546,9 +544,9 @@ fn parse_within(args: &[Json]) -> Result<Expr> {
 /// any `Multi*` into simple Point/LineString/Polygon geometries).
 fn parse_distance(args: &[Json]) -> Result<Expr> {
     let err = || {
-        ParseError::new(
-            "'distance' expression requires valid geojson object that contains polygon geometry type.",
-        )
+        ParseError::of(ParseErrorKind::GeojsonPolygon {
+            op: "distance".to_string(),
+        })
     };
     if args.len() != 1 {
         return Err(ParseError::of(ParseErrorKind::RequiresExactlyOneArg {
@@ -656,14 +654,10 @@ fn parse_polygon(rings: &[Json]) -> Option<Vec<Vec<(f64, f64)>>> {
 
 fn parse_format(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.is_empty() {
-        return Err(ParseError::new(
-            "Expected at least one argument to 'format'.",
-        ));
+        return Err(ParseError::of(ParseErrorKind::FormatAtLeastOne));
     }
     if args[0].is_object() {
-        return Err(ParseError::new(
-            "First argument to 'format' must be an image or text section.",
-        ));
+        return Err(ParseError::of(ParseErrorKind::FormatFirstSection));
     }
     let mut sections: Vec<FormatArg> = Vec::new();
     let mut next_may_be_object = false;
@@ -689,9 +683,9 @@ fn parse_format(args: &[Json], opts: &Options) -> Result<Expr> {
             if let Some(v) = obj.get("vertical-align") {
                 if let Some(s) = v.as_str() {
                     if !VERTICAL_ALIGN.contains(&s) {
-                        return Err(ParseError::new(format!(
-                            "'vertical-align' must be one of: 'bottom', 'center', 'top' but found '{s}' instead."
-                        )));
+                        return Err(ParseError::of(ParseErrorKind::VerticalAlign {
+                            found: s.to_string(),
+                        }));
                     }
                 }
                 section.vertical_align = Some(parse(v, opts).map_err(|e| e.at(sec))?);
@@ -712,13 +706,13 @@ fn parse_format(args: &[Json], opts: &Options) -> Result<Expr> {
 }
 
 fn parse_interp_kind(json: &Json) -> Result<InterpKind> {
-    let items = json.as_array().ok_or_else(|| {
-        ParseError::new("Interpolation type must be an array, e.g. [\"linear\"].")
-    })?;
+    let items = json
+        .as_array()
+        .ok_or_else(|| ParseError::of(ParseErrorKind::InterpolationTypeArray))?;
     let name = items
         .first()
         .and_then(Json::as_str)
-        .ok_or_else(|| ParseError::new("Interpolation type name must be a string."))?;
+        .ok_or_else(|| ParseError::of(ParseErrorKind::InterpolationTypeName))?;
     match name {
         "linear" => Ok(InterpKind::Linear),
         "exponential" => {
@@ -746,9 +740,9 @@ fn parse_interp_kind(json: &Json) -> Result<InterpKind> {
                 _ => Err(cubic_err()),
             }
         }
-        other => Err(ParseError::new(format!(
-            "Unknown interpolation type \"{other}\"."
-        ))),
+        other => Err(ParseError::of(ParseErrorKind::UnknownInterpolationType {
+            name: other.to_string(),
+        })),
     }
 }
 
@@ -804,9 +798,9 @@ fn expect_arity(op: &str, args: &[Json], n: usize) -> Result<()> {
             found: args.len(),
         }))
     } else {
-        Err(ParseError::new(format!(
-            "Expected {n} arguments, but found {} instead.",
-            args.len()
-        )))
+        Err(ParseError::of(ParseErrorKind::ExpectedNArgs {
+            n,
+            found: args.len(),
+        }))
     }
 }

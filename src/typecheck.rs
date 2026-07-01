@@ -45,7 +45,7 @@ fn check_constant_errors(expr: &Expr) -> Result<(), ParseError> {
             Ok(_) => Ok(()),
             // An unimplemented/custom operator (e.g. a user function) can't be
             // folded here; check its children instead of failing.
-            Err(e) if e.to_string().starts_with("Unimplemented operator") => {
+            Err(e) if matches!(e.kind, crate::error::EvalErrorKind::Unimplemented { .. }) => {
                 for child in children(expr) {
                     check_constant_errors(child)?;
                 }
@@ -233,10 +233,7 @@ impl Checker {
         for (k, (name, value)) in bindings.iter().enumerate() {
             if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
                 self.scope.truncate(base);
-                return Err(ParseError::new(
-                    "Variable names must contain only alphanumeric characters or '_'.",
-                )
-                .at(1 + 2 * k));
+                return Err(ParseError::of(ParseErrorKind::VariableName).at(1 + 2 * k));
             }
             let (node, t) = match self.infer_at(value, None, 2 + 2 * k) {
                 Ok(v) => v,
@@ -460,9 +457,9 @@ impl Checker {
             "length" => {
                 let (node, t) = self.infer(&args[0], None)?;
                 if !matches!(t, Type::Array(..) | Type::String | Type::Value) {
-                    return Err(ParseError::new(format!(
-                        "Expected argument of type string or array, but found {t} instead."
-                    )));
+                    return Err(ParseError::of(ParseErrorKind::ExpectedStringOrArray {
+                        found: t.to_string(),
+                    }));
                 }
                 mk(vec![node], Type::Number)
             }
@@ -587,9 +584,7 @@ impl Checker {
             // be string- or value-typed.
             let stringy = |t: &Type| matches!(t, Type::String | Type::Value);
             if !stringy(&lt) && !stringy(&rt) {
-                return Err(ParseError::new(
-                    "Cannot use collator to compare non-string types.",
-                ));
+                return Err(ParseError::of(ParseErrorKind::CollatorNonString));
             }
             new_args.push(self.infer(third, Some(&Type::Collator))?.0);
         }
@@ -749,10 +744,7 @@ impl Checker {
                 ct,
                 Type::String | Type::Value | Type::Null | Type::ResolvedImage
             ) {
-                return Err(ParseError::new(
-                    "Formatted text type must be 'string', 'value', 'image' or 'null'.",
-                )
-                .at(sec));
+                return Err(ParseError::of(ParseErrorKind::FormattedTextType).at(sec));
             }
             let opt = |this: &mut Self, e: &Option<Expr>, ty: Type| match e {
                 Some(e) => Ok(Some(this.infer_at(e, Some(&ty), sec)?.0)),

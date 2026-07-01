@@ -73,7 +73,9 @@ impl Evaluator<'_> {
                 .rev()
                 .find(|(n, _)| n == name)
                 .map(|(_, v)| v.clone())
-                .ok_or_else(|| EvalError::new(format!("Unknown variable \"{name}\"."))),
+                .ok_or_else(|| {
+                    EvalError::of(EvalErrorKind::UnknownVariable { name: name.clone() })
+                }),
             Expr::Let { bindings, body } => self.eval_let(bindings, body),
             Expr::Match {
                 input,
@@ -343,9 +345,9 @@ impl Evaluator<'_> {
         let funcs = self.funcs;
         if let Some(func) = funcs.get(op) {
             if self.depth + 1 > MAX_CALL_DEPTH {
-                return Err(EvalError::new(format!(
-                    "Maximum call depth exceeded calling function '{op}'."
-                )));
+                return Err(EvalError::of(EvalErrorKind::MaxCallDepth {
+                    op: op.to_string(),
+                }));
             }
             let mut arg_values = Vec::with_capacity(args.len());
             for a in args {
@@ -387,7 +389,7 @@ impl Evaluator<'_> {
                 .ctx
                 .zoom
                 .map(Value::Number)
-                .ok_or_else(|| EvalError::new("The 'zoom' expression is unavailable here.")),
+                .ok_or_else(|| EvalError::of(EvalErrorKind::ZoomUnavailable)),
             "global-state" => {
                 let key = self.eval_string(&args[0])?;
                 Ok(self
@@ -508,9 +510,9 @@ impl Evaluator<'_> {
             "rgb" => self.op_rgb(args, false),
             "rgba" => self.op_rgb(args, true),
 
-            other => Err(EvalError::new(format!(
-                "Unimplemented operator \"{other}\"."
-            ))),
+            other => Err(EvalError::of(EvalErrorKind::Unimplemented {
+                op: other.to_string(),
+            })),
         }
     }
 
@@ -1500,9 +1502,7 @@ fn interpolate_values(lo: &Value, hi: &Value, t: f64, space: InterpSpace) -> Res
                 transition: t,
             }))
         }
-        _ => Err(EvalError::new(
-            "Interpolation outputs must be numbers, colors, or arrays of numbers.",
-        )),
+        _ => Err(EvalError::of(EvalErrorKind::InterpolationOutputs)),
     }
 }
 

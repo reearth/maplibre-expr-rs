@@ -84,6 +84,15 @@ fn structural_kinds_are_semantic() {
         compile_err(json!(["match", ["get", "x"], true, "a", "d"]), None).kind,
         ParseErrorKind::BranchLabelsType
     ));
+    // Formerly Other(String), now dedicated variants.
+    assert!(matches!(
+        compile_err(json!(["match", ["get", "x"], 1, "a", 2, "b"]), None).kind,
+        ParseErrorKind::ExpectedEvenArgs { op: "match" }
+    ));
+    assert!(matches!(
+        compile_err(json!(["interpolate", "linear", ["zoom"], 0, 0]), None).kind,
+        ParseErrorKind::InterpolationTypeArray
+    ));
 }
 
 #[test]

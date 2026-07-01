@@ -56,9 +56,11 @@ location path of the offending sub-expression (e.g. `"[2]"` or `"[4][0]"`),
 collected as the error bubbles up. Both the message text and the location key
 match the reference implementation **byte-for-byte** across the conformance
 suite, and the harness enforces this (see [Conformance testing](#conformance-testing)).
-Most causes have a dedicated variant (`CouldNotParse`, `ArrayIndexOutOfBounds`,
-`InvalidRgba`, `BranchLabels*`, …); an `Other` kind backs only the remaining
-one-off structural shape checks (e.g. malformed interpolation-type arrays).
+Every intrinsic error has a dedicated variant (`CouldNotParse`,
+`ArrayIndexOutOfBounds`, `InvalidRgba`, `BranchLabels*`, `ExpectedEvenArgs`,
+`InterpolationTypeArray`, …). The `Other(String)` kind is reserved for
+message-only cases with no fixed category: the user-thrown `["error", msg]`
+operator, and runtime errors surfaced by compile-time constant folding.
 
 ## Extensions: macros and functions
 
