@@ -35,6 +35,7 @@ mod distance;
 mod error;
 mod eval;
 mod ext;
+pub mod filter;
 mod geometry;
 mod parse;
 mod typ;
@@ -46,6 +47,7 @@ pub use color::Color;
 pub use context::{EvaluationContext, Feature};
 pub use error::{EvalError, EvalErrorKind, ParseError, ParseErrorKind};
 pub use ext::{Function, Macro, Options};
+pub use filter::{convert_legacy_filter, is_expression_filter, FilterError};
 pub use typ::Type;
 pub use value::{Projection, Value};
 
