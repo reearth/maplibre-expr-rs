@@ -52,7 +52,6 @@ pub struct Function {
 }
 
 /// Parser/runtime extension registry.
-#[derive(Default)]
 pub struct Options {
     pub(crate) macros: HashMap<String, Macro>,
     pub(crate) functions: HashMap<String, Function>,
@@ -60,11 +59,35 @@ pub struct Options {
     pub(crate) natives: HashMap<String, (usize, NativeFn)>,
     /// Current macro-expansion depth (transient parse state).
     pub(crate) depth: AtomicUsize,
+    /// Whether the parser transparently converts legacy function objects
+    /// (`{type, property, stops, ...}`) to modern expressions before parsing.
+    /// On by default; see [`crate::convert`].
+    pub(crate) convert_legacy: bool,
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            macros: HashMap::new(),
+            functions: HashMap::new(),
+            natives: HashMap::new(),
+            depth: AtomicUsize::new(0),
+            convert_legacy: true,
+        }
+    }
 }
 
 impl Options {
     pub fn new() -> Options {
         Options::default()
+    }
+
+    /// Enable or disable transparent conversion of legacy function objects
+    /// (on by default). When disabled, a bare JSON object is rejected as a
+    /// parse error rather than being treated as a legacy function.
+    pub fn convert_legacy(&mut self, enabled: bool) -> &mut Options {
+        self.convert_legacy = enabled;
+        self
     }
 
     /// Register a macro expanded at parse time.

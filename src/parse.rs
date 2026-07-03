@@ -17,6 +17,12 @@ type Result<T> = std::result::Result<T, ParseError>;
 pub fn parse(json: &Json, opts: &Options) -> Result<Expr> {
     match json {
         Json::Array(items) => parse_array(items, opts),
+        // A legacy function object (`{type, property, stops, ...}`) is converted
+        // to the equivalent modern expression, then parsed. No property spec is
+        // available here, so conversion relies on the object's own fields.
+        Json::Object(_) if opts.convert_legacy && crate::convert::is_function(json) => {
+            parse(&crate::convert::convert_function(json, &Json::Null), opts)
+        }
         Json::Object(_) => Err(ParseError::of(ParseErrorKind::BareObject)),
         _ => Ok(Expr::Literal(Value::from_json(json))),
     }
