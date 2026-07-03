@@ -158,6 +158,34 @@ has no spec, so it relies on the object's own fields.
 
 [`convert`]: https://docs.rs/maplibre-expr
 
+## Legacy filters
+
+Layer filters have the same legacy/modern split. Old styles wrote filters as
+nested arrays with a *bare* property name — `["==", "class", "primary"]`,
+`["in", "type", "a", "b"]`, `["all", …]` — while modern filters are ordinary
+boolean expressions (`["==", ["get", "class"], "primary"]`). The [`filter`]
+module ports maplibre-style-spec's `feature_filter`:
+
+```rust
+use maplibre_expr::filter::{convert_legacy_filter, is_expression_filter};
+use serde_json::json;
+
+let legacy = json!(["all", ["!=", "name", "International Date Line"]]);
+assert!(!is_expression_filter(&legacy));
+
+// → ["!=", ["get", "name"], "International Date Line"]
+let expr = convert_legacy_filter(&legacy).unwrap();
+```
+
+`is_expression_filter` tells the two apart, and `convert_legacy_filter` returns
+the equivalent expression as raw JSON (an input that already *is* an expression
+is returned unchanged). The conversion faithfully reproduces legacy semantics:
+strictly-typed comparisons that yield `false` on a type mismatch, the `$type` /
+`$id` special keys (`["geometry-type"]` / `["id"]`), and the preflight `typeof`
+guards that keep an `any` term from erroring out its siblings.
+
+[`filter`]: https://docs.rs/maplibre-expr
+
 ## Implementation notes
 
 - **`distance` uses a brute-force pairwise scan** rather than MapLibre's
