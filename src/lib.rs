@@ -30,6 +30,7 @@
 mod ast;
 mod color;
 mod context;
+pub mod convert;
 mod distance;
 mod error;
 mod eval;

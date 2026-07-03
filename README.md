@@ -128,6 +128,36 @@ custom operators parses and evaluates identically with or without them.
 
 [`Options`]: https://docs.rs/maplibre-expr
 
+## Legacy function objects
+
+Before expressions existed, styling was driven by *function objects* —
+`{"type": "exponential", "property": "x", "stops": [...]}` and friends.
+`parse` accepts these transparently: hand it either a modern expression or a
+legacy function object and it converts the latter to the equivalent modern
+expression (`interpolate` / `step` / `match` / `case` / …) before parsing — a
+port of maplibre-style-spec's `convert.ts`, so the result matches the reference.
+
+```rust
+use maplibre_expr::{parse, evaluate, EvaluationContext};
+use serde_json::json;
+
+// A zoom function → ["interpolate", ["exponential", 2], ["zoom"], 0, 0, 10, 100].
+let expr = parse(&json!({
+    "type": "exponential", "base": 2, "stops": [[0, 0], [10, 100]],
+})).unwrap();
+let out = evaluate(&expr, &EvaluationContext::new().with_zoom(10.0)).unwrap();
+```
+
+Conversion is on by default; turn it off with
+[`Options::convert_legacy(false)`][`Options`] to reject bare objects instead.
+The [`convert`] module is also public: call `convert::convert_function(params,
+spec)` directly when you have the property's style spec, which unlocks the
+spec-dependent cases (`{token}` expansion, `enum`/`array`/`color` identity
+functions, and the `exponential`-vs-`interval` default). The transparent path
+has no spec, so it relies on the object's own fields.
+
+[`convert`]: https://docs.rs/maplibre-expr
+
 ## Implementation notes
 
 - **`distance` uses a brute-force pairwise scan** rather than MapLibre's
