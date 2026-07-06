@@ -119,6 +119,30 @@ pub fn is_expression_filter(filter: &Json) -> bool {
     }
 }
 
+/// Whether an expression-classified `all`/`any`/`none` combiner still hides a
+/// legacy-only leaf that [`convert`] should rewrite.
+///
+/// `is_expression_filter` promotes a combiner to an expression as soon as *one*
+/// child is a genuine expression, even when siblings are legacy-only (e.g. a
+/// three-arg `["==", "prop", value]` or `["!has", …]`). Upstream MapLibre
+/// rejects that mix; we instead convert the legacy leaves. Only combiners are
+/// descended — a legacy shape nested inside some other expression operator is
+/// not something MapLibre (or we) auto-convert.
+fn has_convertible_legacy_leaf(filter: &Json) -> bool {
+    let Some(arr) = filter.as_array() else {
+        return false;
+    };
+    if !matches!(
+        arr.first().and_then(Json::as_str),
+        Some("all") | Some("any") | Some("none")
+    ) {
+        return false;
+    }
+    arr[1..].iter().any(|child| {
+        child.is_array() && (!is_expression_filter(child) || has_convertible_legacy_leaf(child))
+    })
+}
+
 /// Convert a legacy MapLibre filter to the equivalent modern expression.
 ///
 /// Supported legacy operators: `==` `!=` `<` `<=` `>` `>=` `in` `!in` `has`
@@ -185,7 +209,14 @@ impl ExpectedTypes {
 }
 
 fn convert(filter: &Json, expected: &mut ExpectedTypes) -> Result<Json, FilterError> {
-    if is_expression_filter(filter) {
+    // A genuine expression passes through unchanged — *unless* it is an
+    // `all`/`any`/`none` combiner that (per `is_expression_filter`) classifies
+    // as an expression only because some child is one, yet still carries a
+    // legacy-only leaf. Upstream MapLibre rejects such mixed filters; we instead
+    // descend and convert the legacy leaves in place (the combiner arms below
+    // recurse per child, so genuine expression children still pass through),
+    // which lets real-world styles like Protomaps basemap render.
+    if is_expression_filter(filter) && !has_convertible_legacy_leaf(filter) {
         return Ok(filter.clone());
     }
     // Falsy filters (`null`) mean "match everything".
