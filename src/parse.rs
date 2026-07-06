@@ -321,6 +321,34 @@ fn arity(op: &str) -> Option<(usize, Option<usize>)> {
     })
 }
 
+/// Whether `op` names a built-in expression operator: a special form dispatched
+/// by [`parse_array`] before the arity table, or an entry in [`arity`]. Mirrors
+/// the operator set the parser recognizes and backs [`crate::is_expression`].
+///
+/// This is arity-agnostic (a head match only), and considers only built-ins —
+/// user macros / functions / natives are `Options`-scoped, not part of the
+/// syntactic expression grammar.
+pub(crate) fn is_operator(op: &str) -> bool {
+    // Special forms recognized outside the `arity` table: the match arms in
+    // `parse_array` (`literal`/`let`/`var`/`match`/`step`/`interpolate*`/
+    // `collator`) plus `case` (its irregular shape is checked in
+    // `check_generic_arity`). The rest — `format`, `number-format`, `within`,
+    // `distance`, `global-state`, `array`, … — are covered by `arity` below.
+    matches!(
+        op,
+        "literal"
+            | "let"
+            | "var"
+            | "match"
+            | "step"
+            | "case"
+            | "interpolate"
+            | "interpolate-hcl"
+            | "interpolate-lab"
+            | "collator"
+    ) || arity(op).is_some()
+}
+
 fn parse_let(args: &[Json], opts: &Options) -> Result<Expr> {
     if args.is_empty() || args.len().is_multiple_of(2) {
         return Err(ParseError::of(ParseErrorKind::ExpectedOddArgsLet));
