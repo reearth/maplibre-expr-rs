@@ -56,6 +56,26 @@ pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
     parse::parse(json, &Options::default())
 }
 
+/// Whether `json` is a MapLibre *expression* — an array whose first element
+/// names a built-in operator — as opposed to a literal value such as a bare
+/// `["Font A", "Font B"]` array or a legacy function object.
+///
+/// A direct analogue of MapLibre's `isExpression`: a purely syntactic head
+/// check that does **not** validate arity or arguments (`["get"]` is still an
+/// expression). `["literal", …]` counts as an expression. Objects, scalars,
+/// the empty array, and an array whose head is not a built-in operator (e.g. a
+/// font-name string) are not expressions. User macros / functions / natives
+/// (which are `Options`-scoped, not part of the grammar) are not considered.
+///
+/// This is the check callers use to tell a data-driven property expression
+/// apart from a plain literal that merely happens to be an array.
+pub fn is_expression(json: &serde_json::Value) -> bool {
+    json.as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|head| head.as_str())
+        .is_some_and(parse::is_operator)
+}
+
 /// Parse an expression with user [`Options`] (macros expand at parse time;
 /// function names are accepted as callable operators).
 pub fn parse_with(json: &serde_json::Value, options: &Options) -> Result<Expr, ParseError> {
