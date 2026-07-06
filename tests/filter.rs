@@ -127,6 +127,11 @@ fn any_all_none_detection() {
         "all",
         ["==", ["get", "a"], 1]
     ])));
+    // An expression child makes the whole thing an expression.
+    assert!(is_expression_filter(&json!([
+        "all",
+        ["==", ["get", "a"], 1]
+    ])));
     // Bare `all`/`any` with no children.
     assert!(is_expression_filter(&json!(["all"])));
     assert!(is_expression_filter(&json!(["any"])));
@@ -157,6 +162,38 @@ fn recognizes_type_mixed_with_expression_operators() {
         ]
     ]);
     assert!(is_expression_filter(&filter));
+}
+
+#[test]
+fn converts_legacy_leaves_inside_mixed_combiner() {
+    // A combiner (`all`/`any`/`none`) that `is_expression_filter` classifies as
+    // an expression — because at least one child is a genuine expression (here
+    // `["has", …]`) — but which still carries legacy-only leaves such as a
+    // three-arg `["==", "prop", value]` or `["!has", …]`. Upstream MapLibre
+    // *rejects* such a mixed filter, but as a renderer we convert the legacy
+    // leaves in place so real-world styles (e.g. Protomaps basemap
+    // `roads_bridges_*` layers) still render. Genuine expression children pass
+    // through unchanged.
+    let filter = json!([
+        "all",
+        ["has", "is_bridge"],
+        ["==", "kind", "highway"],
+        ["!has", "is_link"]
+    ]);
+    // Faithful to upstream: the whole thing classifies as an expression …
+    assert!(is_expression_filter(&filter));
+    // … but conversion still rewrites the legacy leaves, leaving no raw `!has`.
+    let converted = convert_legacy_filter(&filter).unwrap();
+    assert!(!converted.to_string().contains("!has"));
+    assert_eq!(
+        converted,
+        json!([
+            "all",
+            ["has", "is_bridge"],
+            ["==", ["get", "kind"], "highway"],
+            ["!", ["has", "is_link"]]
+        ])
+    );
 }
 
 // --- convertFilter output shape --------------------------------------------
