@@ -236,7 +236,19 @@ other static-analysis fields (`type`, `isFeatureConstant`, `isZoomConstant`).
 
 Refresh the vendored snapshot with `tests/refresh_fixtures.sh [git-ref]`.
 
+## Community
+
+`maplibre-expr` is part of the [MapLibre](https://maplibre.org) ecosystem.
+Discussion happens in the `#maplibre` channel on the OSM-US Slack — join with
+the [OSM-US Slack invite](https://slack.openstreetmap.us).
+
+Please also see our [Code of Conduct](CODE_OF_CONDUCT.md), the
+[Contributing guide](CONTRIBUTING.md), and the
+[Security policy](SECURITY.md).
+
 ## License
+
+Copyright (c) 2026 MapLibre contributors
 
 Licensed under either of
 
