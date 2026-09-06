@@ -18,7 +18,7 @@ A clear and concise description of what the bug is.
 What `maplibre-gl-js` returns / how it errors for the same input.
 If possible, include a link to a JSFiddle / snippet demonstrating the reference behavior.
 
-**Actual behavior (maplibre-expr)**
+**Actual behavior (maplibre-expr-rs)**
 What this crate returns / how it errors.
 Include the full error message and location `key` if it is a parse/type/eval error.
 

@@ -1,4 +1,4 @@
-# Contributing to maplibre-expr
+# Contributing to maplibre-expr-rs
 
 Thanks for your interest in contributing! This crate is a pure-Rust parser and
 evaluator for the [MapLibre GL style expression language][spec]. Its goal is to

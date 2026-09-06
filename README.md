@@ -1,4 +1,4 @@
-# maplibre-expr
+# maplibre-expr-rs
 
 [![crates.io](https://img.shields.io/crates/v/maplibre-expr.svg)](https://crates.io/crates/maplibre-expr)
 [![docs.rs](https://img.shields.io/docsrs/maplibre-expr)](https://docs.rs/maplibre-expr)
@@ -260,7 +260,7 @@ Refresh the vendored snapshot with `tests/refresh_fixtures.sh [git-ref]`.
 
 ## Community
 
-`maplibre-expr` is part of the [MapLibre](https://maplibre.org) ecosystem.
+`maplibre-expr-rs` is part of the [MapLibre](https://maplibre.org) ecosystem.
 Discussion happens in the `#maplibre` channel on the OSM-US Slack — join with
 the [OSM-US Slack invite](https://slack.openstreetmap.us).
 
