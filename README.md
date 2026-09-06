@@ -15,8 +15,8 @@ results, but the same compile errors, in the same places.
   location `key` (e.g. `"[4][0]"`). The test harness enforces this, so the
   parity can't silently regress.
 - 🦀 **Pure Rust, tiny surface.** No rendering, no I/O, no C deps — just
-  `serde_json` and a pure-Rust ICU for locale-aware collation. Works anywhere
-  Rust does.
+  `serde_json` and a pure-Rust ICU for locale-aware collation (behind the
+  default `collator` feature, see below). Works anywhere Rust does.
 - 🧱 **Real pipeline.** `parse` → optional static `typecheck` (the same
   type-inference/coercion pass MapLibre runs) → `evaluate` against a
   zoom + feature context. Full coverage: `match`/`step`/`interpolate`, `format`,
@@ -202,6 +202,28 @@ guards that keep an `any` term from erroring out its siblings.
   ICU strength plus case level.
 
 [`icu_collator`]: https://crates.io/crates/icu_collator
+
+## Feature flags
+
+| Feature | Default | Effect |
+| --- | --- | --- |
+| `collator` | ✅ | Locale-aware `collator` comparisons via [`icu_collator`]'s embedded CLDR data. |
+
+The CLDR tables are the crate's only heavyweight dependency — roughly 1.1 MB of
+static data and ~28 extra crates in the build graph. If your styles don't use
+the `collator` expression (most don't), turning the feature off is worth it,
+especially for wasm:
+
+```toml
+maplibre-expr = { version = "0.3", default-features = false }
+```
+
+Doing so does **not** change what the crate accepts: `["collator", …]` still
+parses and type-checks identically, and `resolved-locale` still works. Only the
+comparison itself changes — the locale and the `case-sensitive` /
+`diacritic-sensitive` options are ignored, and operands are compared in
+code-point order. The 15 conformance fixtures that depend on CLDR tailoring are
+reported as *ignored* in that configuration rather than being silently dropped.
 
 ## Conformance testing
 

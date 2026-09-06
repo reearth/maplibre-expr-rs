@@ -4,6 +4,25 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3]
+
+### Added
+
+- `collator` feature (on by default) gating the ICU4X-backed, locale-aware
+  `collator` comparisons. With `default-features = false` the crate carries no
+  CLDR data: `["collator", …]` still parses and type-checks identically and
+  `resolved-locale` still works, but comparisons ignore the locale and the
+  `case-sensitive` / `diacritic-sensitive` options and fall back to code-point
+  order. The 15 conformance fixtures that depend on CLDR tailoring are reported
+  as *ignored* in that configuration rather than silently dropped.
+
+### Changed
+
+- Depend on `icu_collator` and `icu_locale_core` directly instead of the `icu`
+  meta-crate, which also built the datetime, segmenter, calendar, list and
+  plurals data crates that nothing here uses. No behaviour change; the
+  dependency graph drops from 68 crates to 42 (and to 14 without `collator`).
+
 ## [0.3.2]
 
 ### Added

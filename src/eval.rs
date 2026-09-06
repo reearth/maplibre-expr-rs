@@ -1742,12 +1742,13 @@ fn group_thousands(int: &str) -> String {
 /// Intl's `sensitivity` is expressed as an ICU collation strength plus a case
 /// level: base → primary, accent → secondary, case → primary + case level,
 /// variant → tertiary. Locale tailoring comes from CLDR via `icu_collator`.
+#[cfg(feature = "collator")]
 fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
-    use icu::collator::{
+    use icu_collator::{
         options::{CaseLevel, CollatorOptions, Strength},
         Collator, CollatorPreferences,
     };
-    use icu::locale::Locale;
+    use icu_locale_core::Locale;
 
     let Value::Collator {
         case_sensitive,
@@ -1786,4 +1787,16 @@ fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::
     };
     let coll = Collator::try_new(prefs, options).ok()?;
     Some(coll.compare(&to_string_value(a), &to_string_value(b)))
+}
+
+/// Fallback used when the `collator` feature is off: no CLDR data is linked, so
+/// the locale and the sensitivity flags are ignored and operands are compared
+/// in code-point order. Parsing and type-checking are unaffected — a `collator`
+/// expression is still accepted, it just does not tailor the ordering.
+#[cfg(not(feature = "collator"))]
+fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    let Value::Collator { .. } = collator else {
+        return None;
+    };
+    Some(to_string_value(a).cmp(&to_string_value(b)))
 }

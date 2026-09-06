@@ -48,6 +48,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo build --all-features --verbose
       - run: cargo test --all-features --verbose
+      # The `collator` feature is optional; keep the ICU-free build compiling
+      # and its fixtures green (the CLDR-dependent ones report as ignored).
+      - run: cargo test --no-default-features --verbose
 
   doc:
     name: rustdoc

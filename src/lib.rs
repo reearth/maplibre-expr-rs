@@ -25,6 +25,14 @@
 //! Conformance is validated against a vendored snapshot of the
 //! `maplibre-style-spec` expression test fixtures; see `tests/spec.rs`.
 //!
+//! # Feature flags
+//!
+//! - **`collator`** (default): locale-aware `collator` comparisons backed by
+//!   ICU4X's embedded CLDR data. With the feature off the crate carries no ICU
+//!   data — `["collator", …]` still parses and type-checks the same way, but
+//!   comparisons ignore the locale and sensitivity options and fall back to
+//!   code-point order.
+//!
 //! [spec]: https://maplibre.org/maplibre-style-spec/expressions/
 
 mod ast;

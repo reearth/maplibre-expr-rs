@@ -1,7 +1,7 @@
 [package]
 name = "maplibre-expr"
 description = "Pure-Rust parser and evaluator for MapLibre GL style expressions"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
@@ -16,11 +16,24 @@ exclude = ["/.github", "/tests/fixtures"]
 [lib]
 name = "maplibre_expr"
 
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["collator"]
+# Locale-aware `collator` comparisons, backed by CLDR data from ICU4X. Without
+# it the `collator` expression still parses and type-checks; comparisons fall
+# back to code-point order.
+collator = ["dep:icu_collator", "dep:icu_locale_core"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-icu = { version = "2", features = ["compiled_data"] }
+# Pulled in directly rather than through the `icu` meta-crate, which would also
+# build the datetime, segmenter, calendar, list and plurals data crates.
+icu_collator = { version = "2", features = ["compiled_data"], optional = true }
+icu_locale_core = { version = "2", optional = true }
 
 [dev-dependencies]
 libtest-mimic = "0.8"
