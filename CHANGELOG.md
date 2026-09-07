@@ -8,6 +8,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `filter::parse_filter` (and `parse_filter_with` for user `Options`) — a
+  one-call convenience that combines `convert_legacy_filter` and `parse`, so a
+  legacy layer filter (`["all", ["!=", "name", "International Date Line"]]`,
+  `["==", "class", "primary"]`, …) parses correctly without the caller
+  remembering to convert first. Handing such a filter straight to `parse`
+  parses it as a comparison of two literals, which then fails type-check
+  (`Cannot compare types 'string' and 'number'.` for the reduced
+  `["!=", "No", 2]` case from MapLibre's demotiles style) or silently
+  evaluates the wrong thing. Mirrors MapLibre's `createFilter`. A new
+  `ParseFilterError` wraps the two ways it can fail (`Convert` /
+  `Parse`).
+
 - `collator` feature (on by default) gating the ICU4X-backed, locale-aware
   `collator` comparisons. With `default-features = false` the crate carries no
   CLDR data: `["collator", …]` still parses and type-checks identically and
