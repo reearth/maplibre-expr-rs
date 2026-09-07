@@ -7,8 +7,10 @@
 
 use std::collections::BTreeMap;
 
-use maplibre_expr::filter::{convert_legacy_filter, is_expression_filter, FilterError};
-use maplibre_expr::{evaluate, parse, EvaluationContext, Feature, Value};
+use maplibre_expr::filter::{
+    convert_legacy_filter, is_expression_filter, parse_filter, FilterError, ParseFilterError,
+};
+use maplibre_expr::{evaluate, parse, typecheck, EvaluationContext, Feature, Type, Value};
 use serde_json::{json, Value as Json};
 
 // --- helpers ---------------------------------------------------------------
@@ -662,6 +664,98 @@ fn foo_named(key: &str, value: Value) -> Feature {
         properties: props,
         ..Feature::default()
     }
+}
+
+// --- parse_filter (convert + parse convenience) ----------------------------
+
+#[test]
+fn parse_filter_converts_legacy_before_parsing() {
+    // The reduced case from the bug report: a legacy `!=` whose reference
+    // implementation compares a property to a value. Handing it straight to
+    // `parse` + `typecheck` treats "No" as a string literal and errors with
+    // "Cannot compare types 'string' and 'number'."; `parse_filter` converts
+    // "No" to `["get", "No"]` first so the type-check succeeds.
+    let raw = json!(["all", ["!=", "No", 2]]);
+    let expr = parse_filter(&raw).expect("parse_filter should convert legacy filter");
+    typecheck(&expr, Some(&Type::Boolean), false)
+        .expect("converted filter should type-check as boolean");
+
+    // The bare pipeline (parse then typecheck) still errors, which is what
+    // triggered the report.
+    let bare = parse(&raw).expect("legacy shape parses as a modern expression");
+    let err = typecheck(&bare, Some(&Type::Boolean), false)
+        .expect_err("without conversion, type-check should still fail");
+    assert!(
+        matches!(
+            err.kind,
+            maplibre_expr::ParseErrorKind::CannotCompare { .. }
+        ),
+        "expected CannotCompare, got {err:?}",
+    );
+}
+
+#[test]
+fn parse_filter_passes_expression_filters_through() {
+    // A modern expression filter — no bare property names, so conversion is a
+    // no-op and the parsed shape matches `parse` on the same input.
+    let expr = json!(["!=", ["get", "name"], "International Date Line"]);
+    let via_filter = parse_filter(&expr).expect("modern filter should parse");
+    let via_parse = parse(&expr).expect("modern filter should parse");
+    assert_eq!(format!("{via_filter:?}"), format!("{via_parse:?}"));
+}
+
+#[test]
+fn parse_filter_evaluates_the_bug_report_reducer() {
+    // End-to-end: with `parse_filter` in front, the reduced filter from the
+    // bug report evaluates as a legacy filter would — "No" names a property,
+    // so a feature with `No = 1` passes `["!=", "No", 2]` and one with
+    // `No = 2` does not.
+    let raw = json!(["all", ["!=", "No", 2]]);
+    let expr = parse_filter(&raw).unwrap();
+    let expr = typecheck(&expr, Some(&Type::Boolean), false).unwrap();
+    let eval = |feat: Feature| {
+        let ctx = EvaluationContext::new().with_feature(feat);
+        evaluate(&expr, &ctx).unwrap()
+    };
+    let mut props = BTreeMap::new();
+    props.insert("No".to_string(), Value::Number(1.0));
+    assert_eq!(
+        eval(Feature {
+            properties: props,
+            ..Feature::default()
+        }),
+        Value::Bool(true)
+    );
+    let mut props = BTreeMap::new();
+    props.insert("No".to_string(), Value::Number(2.0));
+    assert_eq!(
+        eval(Feature {
+            properties: props,
+            ..Feature::default()
+        }),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn parse_filter_surfaces_conversion_errors() {
+    // A malformed legacy filter (non-string property operand) surfaces as a
+    // `Convert` error rather than being swallowed or misreported as a parse
+    // failure.
+    let err = parse_filter(&json!(["==", 42, 5])).expect_err("bad property should error");
+    assert_eq!(
+        err,
+        ParseFilterError::Convert(FilterError::PropertyNotString { op: "==".into() })
+    );
+}
+
+#[test]
+fn parse_filter_surfaces_parse_errors_on_converted_form() {
+    // A modern expression that is well-formed as a filter classification-wise
+    // but does not parse as an expression (unknown operator). The error should
+    // surface as `Parse`, not `Convert`.
+    let err = parse_filter(&json!(["nope", ["get", "x"]])).expect_err("bad op should error");
+    assert!(matches!(err, ParseFilterError::Parse(_)), "got {err:?}");
 }
 
 #[test]

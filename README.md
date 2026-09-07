@@ -184,6 +184,23 @@ strictly-typed comparisons that yield `false` on a type mismatch, the `$type` /
 `$id` special keys (`["geometry-type"]` / `["id"]`), and the preflight `typeof`
 guards that keep an `any` term from erroring out its siblings.
 
+If you just want a parsed `Expr` from a filter — modern or legacy — use
+`parse_filter`, which mirrors MapLibre's `createFilter` by doing the
+convert-then-parse step for you:
+
+```rust
+use maplibre_expr::filter::parse_filter;
+use serde_json::json;
+
+// Bare "name" is a legacy property reference — auto-converted before parsing.
+let expr = parse_filter(&json!(["all", ["!=", "name", "International Date Line"]])).unwrap();
+```
+
+Without this step, `parse` would parse the legacy filter as a modern expression
+comparing two literals, which either fails to type-check (e.g. `["!=", "name",
+2]` reports `Cannot compare types 'string' and 'number'.`) or silently
+evaluates against the wrong operands.
+
 [`filter`]: https://docs.rs/maplibre-expr
 
 ## Implementation notes

@@ -31,6 +31,10 @@
 
 use serde_json::{json, Value as Json};
 
+use crate::ast::Expr;
+use crate::error::ParseError;
+use crate::ext::Options;
+
 /// A legacy filter that could not be converted to an expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilterError {
@@ -52,6 +56,48 @@ impl std::fmt::Display for FilterError {
 }
 
 impl std::error::Error for FilterError {}
+
+/// The two ways [`parse_filter`] can fail: a legacy-conversion error
+/// (structurally malformed legacy filter) or an expression parse error on the
+/// converted result.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParseFilterError {
+    /// The input was a malformed *legacy* filter that [`convert_legacy_filter`]
+    /// could not rewrite (e.g. a non-string property operand).
+    Convert(FilterError),
+    /// The (converted) filter did not parse as a valid expression.
+    Parse(ParseError),
+}
+
+impl std::fmt::Display for ParseFilterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseFilterError::Convert(e) => std::fmt::Display::fmt(e, f),
+            ParseFilterError::Parse(e) => std::fmt::Display::fmt(e, f),
+        }
+    }
+}
+
+impl std::error::Error for ParseFilterError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ParseFilterError::Convert(e) => Some(e),
+            ParseFilterError::Parse(e) => Some(e),
+        }
+    }
+}
+
+impl From<FilterError> for ParseFilterError {
+    fn from(err: FilterError) -> ParseFilterError {
+        ParseFilterError::Convert(err)
+    }
+}
+
+impl From<ParseError> for ParseFilterError {
+    fn from(err: ParseError) -> ParseFilterError {
+        ParseFilterError::Parse(err)
+    }
+}
 
 /// Whether `filter` is already a modern expression filter (as opposed to a
 /// legacy filter needing conversion). A direct port of `isExpressionFilter`.
@@ -426,4 +472,45 @@ fn js_string(v: &Json) -> String {
         Json::Null => "null".to_string(),
         other => other.to_string(),
     }
+}
+
+/// Parse a MapLibre layer filter, auto-converting legacy shapes first.
+///
+/// Layer filters carry a legacy/modern split: an old style writes
+/// `["==", "class", "primary"]` with a bare property name, a modern style
+/// writes `["==", ["get", "class"], "primary"]`. Feeding a legacy filter
+/// straight to [`parse`](crate::parse) parses it as an expression that
+/// compares two literals — which then fails to type-check (a bare
+/// `["!=", "name", 2]` reports `Cannot compare types 'string' and 'number'`)
+/// or silently evaluates against the wrong operands.
+///
+/// This convenience mirrors MapLibre's `createFilter` compile step:
+/// [`is_expression_filter`] classifies the input, [`convert_legacy_filter`]
+/// rewrites legacy leaves in place (including inside mixed
+/// `all`/`any`/`none` combiners), and the result is handed to
+/// [`parse`](crate::parse). A filter that is already a modern expression is
+/// parsed unchanged.
+///
+/// ```
+/// use maplibre_expr::filter::parse_filter;
+/// use serde_json::json;
+///
+/// // Legacy filter — "name" names the property, not a literal string.
+/// let expr = parse_filter(&json!(["all", ["!=", "name", "International Date Line"]]))
+///     .expect("legacy filter should parse");
+///
+/// // Modern filter — passes through untouched.
+/// let expr = parse_filter(&json!(["!=", ["get", "name"], "International Date Line"]))
+///     .expect("modern filter should parse");
+/// # let _ = expr;
+/// ```
+pub fn parse_filter(filter: &Json) -> Result<Expr, ParseFilterError> {
+    parse_filter_with(filter, &Options::default())
+}
+
+/// [`parse_filter`] with user [`Options`] (macros/functions/natives), applied
+/// while parsing the converted expression.
+pub fn parse_filter_with(filter: &Json, options: &Options) -> Result<Expr, ParseFilterError> {
+    let converted = convert_legacy_filter(filter)?;
+    Ok(crate::parse::parse(&converted, options)?)
 }
