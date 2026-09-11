@@ -54,7 +54,7 @@ pub use ast::{Expr, InterpKind, InterpSpace};
 pub use color::Color;
 pub use context::{EvaluationContext, Feature};
 pub use error::{EvalError, EvalErrorKind, ParseError, ParseErrorKind};
-pub use ext::{Function, Macro, Options};
+pub use ext::{ExprFn, ExternalFn, Macro, Options};
 pub use filter::{
     convert_legacy_filter, is_expression_filter, parse_filter, parse_filter_with, FilterError,
     ParseFilterError,
@@ -75,8 +75,8 @@ pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
 /// check that does **not** validate arity or arguments (`["get"]` is still an
 /// expression). `["literal", …]` counts as an expression. Objects, scalars,
 /// the empty array, and an array whose head is not a built-in operator (e.g. a
-/// font-name string) are not expressions. User macros / functions / natives
-/// (which are `Options`-scoped, not part of the grammar) are not considered.
+/// font-name string) are not expressions. User macros / expression functions /
+/// external functions (which are `Options`-scoped, not part of the grammar) are not considered.
 ///
 /// This is the check callers use to tell a data-driven property expression
 /// apart from a plain literal that merely happens to be an array.
@@ -88,7 +88,8 @@ pub fn is_expression(json: &serde_json::Value) -> bool {
 }
 
 /// Parse an expression with user [`Options`] (macros expand at parse time;
-/// function names are accepted as callable operators).
+/// expression-function and external-function names are accepted as callable
+/// operators).
 pub fn parse_with(json: &serde_json::Value, options: &Options) -> Result<Expr, ParseError> {
     parse::parse(json, options)
 }
@@ -116,8 +117,9 @@ pub fn evaluate(expr: &Expr, ctx: &EvaluationContext) -> Result<Value, EvalError
     eval::eval(expr, ctx)
 }
 
-/// Evaluate with user [`Options`], so calls to user functions are dispatched to
-/// their (recursion-limited) bodies.
+/// Evaluate with user [`Options`], so calls to expression functions are
+/// dispatched to their (recursion-limited) bodies and calls to external
+/// functions to their closures.
 pub fn evaluate_with(
     expr: &Expr,
     ctx: &EvaluationContext,

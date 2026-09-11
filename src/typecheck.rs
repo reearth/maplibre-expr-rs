@@ -43,7 +43,7 @@ fn check_constant_errors(expr: &Expr) -> Result<(), ParseError> {
     if is_constant(expr) {
         match crate::eval::eval(expr, &crate::context::EvaluationContext::default()) {
             Ok(_) => Ok(()),
-            // An unimplemented/custom operator (e.g. a user function) can't be
+            // An unimplemented/custom operator (e.g. an expression function) can't be
             // folded here; check its children instead of failing.
             Err(e) if matches!(e.kind, crate::error::EvalErrorKind::Unimplemented { .. }) => {
                 for child in children(expr) {

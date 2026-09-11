@@ -30,6 +30,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** the user-extension API is renamed to keep clear of MapLibre's
+  own terminology, where a *function* is the legacy `{ "stops": … }` object
+  (zoom / property function) that `convert` translates. Eval-time bodies
+  written in the expression language are now *expression functions*:
+  `Function` → `ExprFn`, `Options::function` → `Options::expr_fn`. Rust
+  closures are *external functions*, after the upstream
+  [external-functions proposal](https://github.com/maplibre/maplibre-style-spec/issues/516):
+  `NativeFn` → `ExternalFn`, `Options::native` → `Options::external`.
+  `Macro` / `Options::macro_def` are unchanged. The `ExtArgCount` parse error
+  now reports the kind as `Expression function` / `External function`, and the
+  call-depth error message says `calling expression function`.
+- Expression-function bodies are now parsed once per `Options` (lazily, on
+  the first `evaluate_with`) and cached until the next registration, instead
+  of being re-parsed on every `evaluate_with` call. A body that fails to parse
+  still surfaces as an `EvalErrorKind::Other` at evaluation time.
+- README restructured: a short quick start, then *Usage* (pipeline, errors,
+  legacy inputs, extensions with a macro / expression-function /
+  external-function comparison), *Feature flags*, and *Development*.
 - Depend on `icu_collator` and `icu_locale_core` directly instead of the `icu`
   meta-crate, which also built the datetime, segmenter, calendar, list and
   plurals data crates that nothing here uses. No behaviour change; the

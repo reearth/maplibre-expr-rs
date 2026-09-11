@@ -12,8 +12,8 @@ be **byte-exact compatible** with the reference implementation in
 - **Request a feature.** Open an issue describing the use case. Note that any
   new operator or behavior must ultimately be justifiable by the upstream
   [style spec][spec] — this crate does not add non-standard operators on its own
-  (users can register their own via `Options::macro_def` / `Options::function`
-  / `Options::native`).
+  (users can register their own via `Options::macro_def` / `Options::expr_fn`
+  / `Options::external`).
 - **Send a pull request.** See below.
 
 ## Development setup

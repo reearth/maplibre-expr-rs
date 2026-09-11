@@ -6,50 +6,37 @@ use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
 use crate::color::Color;
 use crate::context::EvaluationContext;
 use crate::error::{EvalError, EvalErrorKind};
-use crate::ext::{NativeFn, Options, MAX_CALL_DEPTH};
+use crate::ext::{CompiledFn, ExternalFn, Options, MAX_CALL_DEPTH};
 use crate::typ::{is_subtype, Type};
 use crate::value::{FormatSection, Value};
 
 type Result<T> = std::result::Result<T, EvalError>;
 
-/// A user function prepared for evaluation: parameter names plus a parsed body.
-struct UserFn {
-    params: Vec<String>,
-    body: Expr,
-}
-
-/// Evaluate an expression against a context (no user functions).
+/// Evaluate an expression against a context (no user extensions).
 pub fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
     let funcs = HashMap::new();
-    let natives = HashMap::new();
+    let externals = HashMap::new();
     let mut ev = Evaluator {
         ctx,
         scope: Vec::new(),
         funcs: &funcs,
-        natives: &natives,
+        externals: &externals,
         depth: 0,
     };
     ev.eval(expr)
 }
 
-/// Evaluate with user functions and native functions from [`Options`].
+/// Evaluate with expression functions and external functions from [`Options`].
 pub fn eval_with(expr: &Expr, ctx: &EvaluationContext, opts: &Options) -> Result<Value> {
-    let mut funcs = HashMap::new();
-    for (name, f) in &opts.functions {
-        let body = crate::parse::parse(&f.body, opts).map_err(|e| EvalError::new(e.to_string()))?;
-        funcs.insert(
-            name.clone(),
-            UserFn {
-                params: f.params.clone(),
-                body,
-            },
-        );
-    }
+    // Bodies are parsed once per `Options` and cached; see `Options::compiled_fns`.
+    let funcs = opts
+        .compiled_fns()
+        .map_err(|e| EvalError::new(e.to_string()))?;
     let mut ev = Evaluator {
         ctx,
         scope: Vec::new(),
-        funcs: &funcs,
-        natives: &opts.natives,
+        funcs,
+        externals: &opts.externals,
         depth: 0,
     };
     ev.eval(expr)
@@ -58,8 +45,8 @@ pub fn eval_with(expr: &Expr, ctx: &EvaluationContext, opts: &Options) -> Result
 struct Evaluator<'a> {
     ctx: &'a EvaluationContext,
     scope: Vec<(String, Value)>,
-    funcs: &'a HashMap<String, UserFn>,
-    natives: &'a HashMap<String, (usize, NativeFn)>,
+    funcs: &'a HashMap<String, CompiledFn>,
+    externals: &'a HashMap<String, (usize, ExternalFn)>,
     depth: usize,
 }
 
@@ -340,7 +327,7 @@ impl Evaluator<'_> {
     }
 
     fn eval_call(&mut self, op: &str, args: &[Expr]) -> Result<Value> {
-        // A user function takes priority: evaluate its arguments, bind them in a
+        // An expression function takes priority: evaluate its arguments, bind them in a
         // fresh scope, and evaluate its body (recursion is depth-limited).
         let funcs = self.funcs;
         if let Some(func) = funcs.get(op) {
@@ -363,9 +350,9 @@ impl Evaluator<'_> {
             self.scope = saved;
             return result;
         }
-        // A native function: evaluate the arguments and hand them to the closure.
-        let natives = self.natives;
-        if let Some((_, f)) = natives.get(op) {
+        // An external function: evaluate the arguments and hand them to the closure.
+        let externals = self.externals;
+        if let Some((_, f)) = externals.get(op) {
             let mut arg_values = Vec::with_capacity(args.len());
             for a in args {
                 arg_values.push(self.eval(a)?);

@@ -50,15 +50,15 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
     })?;
     let args = &items[1..];
 
-    // User macros expand at parse time; user functions become ordinary calls
-    // that the evaluator dispatches.
+    // User macros expand at parse time; expression and external functions
+    // become ordinary calls that the evaluator dispatches.
     if opts.macros.contains_key(op) {
         return expand_macro(op, args, opts);
     }
-    if let Some(f) = opts.functions.get(op) {
+    if let Some(f) = opts.expr_fns.get(op) {
         if args.len() != f.params.len() {
             return Err(ParseError::of(ParseErrorKind::ExtArgCount {
-                kind: "Function",
+                kind: "Expression function",
                 op: op.to_string(),
                 expected: f.params.len(),
                 found: args.len(),
@@ -69,10 +69,10 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
             args: parse_all(args, opts)?,
         });
     }
-    if let Some((arity, _)) = opts.natives.get(op) {
+    if let Some((arity, _)) = opts.externals.get(op) {
         if args.len() != *arity {
             return Err(ParseError::of(ParseErrorKind::ExtArgCount {
-                kind: "Function",
+                kind: "External function",
                 op: op.to_string(),
                 expected: *arity,
                 found: args.len(),
@@ -326,7 +326,7 @@ fn arity(op: &str) -> Option<(usize, Option<usize>)> {
 /// the operator set the parser recognizes and backs [`crate::is_expression`].
 ///
 /// This is arity-agnostic (a head match only), and considers only built-ins —
-/// user macros / functions / natives are `Options`-scoped, not part of the
+/// user macros / expression functions / external functions are `Options`-scoped, not part of the
 /// syntactic expression grammar.
 pub(crate) fn is_operator(op: &str) -> bool {
     // Special forms recognized outside the `arity` table: the match arms in

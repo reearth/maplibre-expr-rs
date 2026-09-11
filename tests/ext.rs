@@ -60,10 +60,10 @@ fn macro_arity_is_checked() {
 }
 
 #[test]
-fn recursive_function_runs() {
+fn recursive_expr_fn_runs() {
     let mut opts = Options::new();
     // countdown(n) = n <= 0 ? 0 : countdown(n - 1)
-    opts.function(
+    opts.expr_fn(
         "countdown",
         vec!["n".into()],
         json!([
@@ -81,10 +81,10 @@ fn recursive_function_runs() {
 }
 
 #[test]
-fn function_can_recurse_and_compute() {
+fn expr_fn_can_recurse_and_compute() {
     let mut opts = Options::new();
     // sum(n) = n <= 0 ? 0 : n + sum(n - 1)   (triangular number)
-    opts.function(
+    opts.expr_fn(
         "sum",
         vec!["n".into()],
         json!([
@@ -105,7 +105,7 @@ fn function_can_recurse_and_compute() {
 fn unbounded_recursion_errors_rather_than_hangs() {
     let mut opts = Options::new();
     // forever(n) = forever(n + 1)  — no base case; must error via depth limit.
-    opts.function(
+    opts.expr_fn(
         "forever",
         vec!["n".into()],
         json!(["forever", ["+", ["var", "n"], 1]]),
@@ -115,17 +115,17 @@ fn unbounded_recursion_errors_rather_than_hangs() {
 }
 
 #[test]
-fn function_arity_is_checked_at_parse() {
+fn expr_fn_arity_is_checked_at_parse() {
     let mut opts = Options::new();
-    opts.function("id", vec!["x".into()], json!(["var", "x"]));
+    opts.expr_fn("id", vec!["x".into()], json!(["var", "x"]));
     assert!(parse_with(&json!(["id", 1, 2]), &opts).is_err());
 }
 
 #[test]
-fn native_function_changes_result_by_argument() {
+fn external_function_changes_result_by_argument() {
     let mut opts = Options::new();
-    // A native closure that dynamically maps codes to labels.
-    opts.native("label", 1, |args, _ctx| {
+    // An external closure that dynamically maps codes to labels.
+    opts.external("label", 1, |args, _ctx| {
         let code = args[0].as_str().unwrap_or("");
         Ok(Value::String(
             match code {
@@ -145,10 +145,10 @@ fn native_function_changes_result_by_argument() {
 }
 
 #[test]
-fn native_function_can_read_context() {
+fn external_function_can_read_context() {
     let mut opts = Options::new();
     // zoom + argument, reading the context directly.
-    opts.native("plus_zoom", 1, |args, ctx| {
+    opts.external("plus_zoom", 1, |args, ctx| {
         let n = args[0].as_number().unwrap_or(0.0);
         Ok(Value::Number(n + ctx.zoom.unwrap_or(0.0)))
     });
@@ -164,4 +164,34 @@ fn native_function_can_read_context() {
 fn options_is_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Options>();
+}
+
+#[test]
+fn expr_fn_registered_after_first_evaluation_is_picked_up() {
+    // Bodies are compiled lazily and cached; a later registration must
+    // invalidate that cache rather than keep evaluating the stale set.
+    let mut opts = Options::new();
+    opts.expr_fn("one", vec![], json!(1));
+    let expr = parse_with(&json!(["one"]), &opts).unwrap();
+    assert_eq!(
+        evaluate_with(&expr, &EvaluationContext::new(), &opts).unwrap(),
+        Value::Number(1.0)
+    );
+
+    opts.expr_fn("two", vec![], json!(["+", ["one"], 1]));
+    let expr = parse_with(&json!(["two"]), &opts).unwrap();
+    assert_eq!(
+        evaluate_with(&expr, &EvaluationContext::new(), &opts).unwrap(),
+        Value::Number(2.0)
+    );
+}
+
+#[test]
+fn expr_fn_body_that_fails_to_parse_errors_at_evaluation() {
+    let mut opts = Options::new();
+    opts.expr_fn("bad", vec![], json!(["no-such-op"]));
+    let expr = parse_with(&json!(["bad"]), &opts).unwrap();
+    assert!(evaluate_with(&expr, &EvaluationContext::new(), &opts).is_err());
+    // Still an error on the second call (the cached failure is not lost).
+    assert!(evaluate_with(&expr, &EvaluationContext::new(), &opts).is_err());
 }

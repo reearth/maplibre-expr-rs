@@ -106,7 +106,8 @@ pub enum ParseErrorKind {
     ExpectedNArgs { n: usize, found: usize },
     /// A `format` first argument that was a bare options object.
     FormatFirstSection,
-    /// A user macro/function/native call with the wrong argument count.
+    /// A user macro / expression-function / external-function call with the
+    /// wrong argument count.
     ExtArgCount {
         kind: &'static str,
         op: String,
@@ -359,7 +360,7 @@ impl std::error::Error for ParseError {}
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalErrorKind {
     /// A message-only error: the user-thrown `["error", msg]` operator, or a
-    /// parse error wrapped while compiling a user function body.
+    /// parse error wrapped while compiling an expression-function body.
     Other(String),
     /// A value was not of the expected type.
     TypeMismatch { expected: String, found: String },
@@ -394,7 +395,7 @@ pub enum EvalErrorKind {
     SearchNeedle { found: String },
     /// An interpolation produced an uninterpolatable output at runtime.
     InterpolationOutputs,
-    /// A user function recursed past the call-depth limit.
+    /// An expression function recursed past the call-depth limit.
     MaxCallDepth { op: String },
     /// `zoom` used where no zoom is available.
     ZoomUnavailable,
@@ -451,7 +452,7 @@ impl fmt::Display for EvalErrorKind {
                 "Interpolation outputs must be numbers, colors, or arrays of numbers."
             ),
             EvalErrorKind::MaxCallDepth { op } => {
-                write!(f, "Maximum call depth exceeded calling function '{op}'.")
+                write!(f, "Maximum call depth exceeded calling expression function '{op}'.")
             }
             EvalErrorKind::ZoomUnavailable => {
                 write!(f, "The 'zoom' expression is unavailable here.")
