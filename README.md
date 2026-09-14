@@ -204,7 +204,7 @@ static data and ~28 extra crates. If your styles don't use `collator` (most
 don't), turn the feature off, especially for wasm:
 
 ```toml
-maplibre-expr = { version = "0.3", default-features = false }
+maplibre-expr = { version = "0.4", default-features = false }
 ```
 
 This does **not** change what the crate accepts: `["collator", …]` still parses
