@@ -216,12 +216,8 @@ fn parse_property_converts_with_the_property_spec() {
         evaluate(&width, &EvaluationContext::new().with_zoom(4.0)).unwrap(),
         Value::Number(13.0)
     );
-    let spec_less = parse(&stops).unwrap();
-    assert_eq!(
-        evaluate(&spec_less, &EvaluationContext::new().with_zoom(4.0)).unwrap(),
-        Value::Number(10.0),
-        "without the spec the object is read as a step function"
-    );
+    // `parse` itself, like `createExpression`, does not read function objects.
+    assert!(parse(&stops).is_err());
 
     // Token strings resolve against the feature.
     let label = parse_property("text-field", &json!("{name}!")).unwrap();

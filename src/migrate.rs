@@ -15,11 +15,12 @@
 //! upstream `v8.json`, embedded in the crate (see `src/reference/`), so no
 //! external input is needed; [`migrate_with`] takes a custom reference instead.
 //!
-//! Prefer this over the spec-less transparent conversion `parse` applies to a
-//! bare function object: without the property's spec the converter cannot tell
-//! an interpolated `line-width` from a stepped `text-transform` and never
-//! expands tokens, so it can produce a *different* expression from MapLibre.
-//! Migrating first makes the two agree.
+//! [`parse`](crate::parse), like MapLibre's `createExpression`, reads only
+//! expressions; migrate a style (or use [`parse_property`](crate::parse_property)
+//! for one value) before handing legacy forms to it. The property's spec is
+//! what tells an interpolated `line-width` from a stepped `text-transform` and
+//! whether a string carries tokens, so guessing without it would not match
+//! MapLibre.
 //!
 //! Like upstream, migration only understands `version: 8` styles; the ancient
 //! v7 → v8 rewrite is not ported.

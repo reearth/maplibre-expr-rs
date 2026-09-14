@@ -77,10 +77,6 @@ pub struct Options {
     /// later, including their own for recursion, so they can't be parsed
     /// eagerly at registration time).
     compiled: OnceLock<Result<HashMap<String, CompiledFn>, ParseError>>,
-    /// Whether the parser transparently converts legacy function objects
-    /// (`{type, property, stops, ...}`) to modern expressions before parsing.
-    /// On by default; see [`crate::convert`].
-    pub(crate) convert_legacy: bool,
 }
 
 impl Default for Options {
@@ -91,7 +87,6 @@ impl Default for Options {
             externals: HashMap::new(),
             depth: AtomicUsize::new(0),
             compiled: OnceLock::new(),
-            convert_legacy: true,
         }
     }
 }
@@ -99,15 +94,6 @@ impl Default for Options {
 impl Options {
     pub fn new() -> Options {
         Options::default()
-    }
-
-    /// Enable or disable transparent conversion of legacy function objects
-    /// (on by default). When disabled, a bare JSON object is rejected as a
-    /// parse error rather than being treated as a legacy function.
-    pub fn convert_legacy(&mut self, enabled: bool) -> &mut Options {
-        self.convert_legacy = enabled;
-        self.compiled = OnceLock::new();
-        self
     }
 
     /// Register a macro expanded at parse time.

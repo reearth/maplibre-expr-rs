@@ -13,15 +13,13 @@
 //! spec supplies information the object alone lacks — whether the property is
 //! interpolatable (which picks `exponential` vs `interval` when `type` is
 //! omitted), whether `{token}` strings expand to `["get", …]`, and the item
-//! type for identity `array`/`enum`/`color` properties. Pass `&Value::Null`
-//! (or an empty object) when no spec is available: conversion then relies only
-//! on the object's own `type`/`base`/`default`/`stops`/`property` fields, which
-//! covers the common cases.
-//!
-//! By default [`parse`](crate::parse) applies this transparently: hand it either
-//! a modern expression or a legacy function object and it does the right thing.
-//! Disable that with [`Options::convert_legacy`](crate::Options::convert_legacy)
-//! when you want bare objects to be rejected instead.
+//! type for identity `array`/`enum`/`color` properties. MapLibre always has
+//! that spec when it reads a style value, and so should you: use
+//! [`parse_property`](crate::parse_property) or [`migrate`](crate::migrate::migrate)
+//! to look it up from the embedded reference. Passing `&Value::Null` makes
+//! the conversion rely on the object's own `type`/`base`/`default`/`stops`/
+//! `property` fields alone, which can differ from MapLibre's reading (an
+//! untyped numeric stop function comes out as `step`, tokens never expand).
 
 use serde_json::{json, Value as Json};
 

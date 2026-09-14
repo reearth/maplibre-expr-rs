@@ -134,12 +134,10 @@ let ctx = EvaluationContext::new().with_zoom(4.0);
 assert_eq!(evaluate(&width, &ctx).unwrap(), Value::Number(13.0)); // interpolated
 ```
 
-Plain `parse` also accepts a bare function object, but without knowing the
-property it has to guess from the object alone — which, unlike MapLibre, reads
-numeric stops as a `step` and never expands tokens. Prefer `parse_property`
-whenever you know the property name; `Options::convert_legacy(false)` makes
-`parse` reject bare objects instead. `filter::parse_filter` converts a legacy
-filter before parsing exactly as MapLibre's `createFilter` does (no spec is
+`parse` itself, like MapLibre's `createExpression`, accepts only expressions
+and rejects a bare object with the same `Bare objects invalid` error — there
+is no spec-less guessing. `filter::parse_filter` converts a legacy filter
+before parsing exactly as MapLibre's `createFilter` does (no spec is
 involved). The lower-level pieces are public too: `convert::convert_function`,
 `convert::convert_token_string`, and `filter::convert_legacy_filter`, which
 reproduces legacy filter semantics faithfully (strictly-typed comparisons that

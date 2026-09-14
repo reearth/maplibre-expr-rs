@@ -14,9 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colors, using a pruned snapshot of the style-spec reference embedded in the
   crate (`src/reference/v8.json`, refreshed with
   `scripts/refresh_reference.sh`). With the property spec in hand the
-  conversion matches the reference implementation exactly, where the spec-less
-  transparent path in `parse` had to guess (numeric stops came out as `step`
-  instead of `interpolate`, tokens were never expanded). The MapLibre demo
+  conversion matches the reference implementation exactly, where the former
+  spec-less conversion in `parse` had to guess (numeric stops came out as
+  `step` instead of `interpolate`, tokens were never expanded). The MapLibre demo
   style `globe.json` is vendored and its migration asserted equal to
   `gl-style-migrate`'s output. Also `migrate::migrate_property` for a single
   value, `migrate_with` / `migrate_property_with` for a custom reference,
@@ -25,9 +25,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `parse_property(name, value)` / `parse_property_with`: parse one
   layout/paint value the way MapLibre's `createPropertyExpression` reads it —
   legacy function objects and `{token}` strings are converted with the
-  property's spec from the embedded reference, then parsed. Plain `parse`
-  keeps its spec-less transparent conversion, now documented as a guess that
-  can differ from MapLibre (numeric stops read as `step`, tokens untouched).
+  property's spec from the embedded reference, then parsed.
 - `filter::parse_filter` (and `parse_filter_with` for user `Options`) — a
   one-call convenience that combines `convert_legacy_filter` and `parse`, so a
   legacy layer filter (`["all", ["!=", "name", "International Date Line"]]`,
@@ -47,6 +45,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `case-sensitive` / `diacritic-sensitive` options and fall back to code-point
   order. The 15 conformance fixtures that depend on CLDR tailoring are reported
   as *ignored* in that configuration rather than silently dropped.
+
+### Removed
+
+- **Breaking:** `parse` no longer converts a bare legacy function object on
+  the fly, and `Options::convert_legacy` is gone. MapLibre never reads a
+  function object without its property spec (`createExpression` rejects
+  objects outright), and the spec-less guess this crate made could differ
+  from MapLibre's reading. A bare object is now the same `Bare objects
+  invalid` parse error as upstream; use `parse_property` (one value) or
+  `migrate` (a whole style) to read legacy forms with their spec.
 
 ### Changed
 

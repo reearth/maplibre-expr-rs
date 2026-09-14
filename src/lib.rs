@@ -64,14 +64,12 @@ pub use migrate::{migrate, MigrateError};
 pub use typ::Type;
 pub use value::{Projection, Value};
 
-/// Parse a MapLibre expression from its JSON representation.
-///
-/// A bare *function object* (`{ "stops": … }`) is converted to an expression
-/// first (unless disabled with [`Options::convert_legacy`]) — but without
-/// knowing which property the value belongs to, that conversion has to guess
-/// from the object alone and can differ from MapLibre's. When you know the
-/// property, use [`parse_property`], which converts with its spec like
-/// MapLibre does.
+/// Parse a MapLibre expression from its JSON representation — the counterpart
+/// of MapLibre's `createExpression`. Like it, this accepts only expressions:
+/// a bare object (including a legacy function object) is a
+/// [`BareObject`](ParseErrorKind::BareObject) error. To read a style value
+/// that may still be a legacy function or `{token}` string, use
+/// [`parse_property`], which converts it with the property's spec first.
 pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
     parse::parse(json, &Options::default())
 }
