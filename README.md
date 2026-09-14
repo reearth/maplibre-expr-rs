@@ -18,6 +18,10 @@ results, but the same compile errors, in the same places.
   [Feature flags](#feature-flags)). Works anywhere Rust does, including wasm.
 - 🧱 **Real pipeline.** `parse` → static `typecheck` (the same inference and
   coercion pass MapLibre runs) → `evaluate` against a zoom + feature context.
+- 🗺️ **Real styles, as they are.** `migrate` ports MapLibre's style migration,
+  with the style-spec reference embedded: hand it a style still using stop
+  functions, `{token}` strings and legacy filters (the official demo tiles do)
+  and get the same expressions the reference implementation produces.
 - 🔌 **Extensible.** Plug in your own operators as macros, expression
   functions, or external Rust closures — without forking the language.
 
@@ -68,63 +72,65 @@ fail to parse.
 
 ### Legacy inputs
 
-Two pre-expression forms are still common in the wild, and both are handled.
+Real-world styles still use three pre-expression forms: *function objects*
+such as `{"type": "exponential", "property": "x", "stops": [...]}`, `{token}`
+strings in `text-field` / `icon-image`, and *legacy filters* with bare property
+names like `["==", "class", "primary"]`. MapLibre converts all of them to
+expressions before evaluating, and so can this crate.
 
-**Function objects** such as `{"type": "exponential", "property": "x",
-"stops": [...]}` are accepted by `parse` transparently and converted to the
-equivalent expression (`interpolate` / `step` / `match` / `case` / …) first — a
-port of maplibre-style-spec's `convert.ts`.
-
-```rust
-use maplibre_expr::{parse, evaluate, EvaluationContext};
-use serde_json::json;
-
-// A zoom function → ["interpolate", ["exponential", 2], ["zoom"], 0, 0, 10, 100].
-let expr = parse(&json!({
-    "type": "exponential", "base": 2, "stops": [[0, 0], [10, 100]],
-})).unwrap();
-let out = evaluate(&expr, &EvaluationContext::new().with_zoom(10.0)).unwrap();
-```
-
-Turn this off with `Options::convert_legacy(false)` to reject bare objects. The
-`convert` module is also public: `convert::convert_function(params, spec)`
-takes the property's style spec, which unlocks the spec-dependent cases
-(`{token}` expansion, `enum` / `array` / `color` identity functions, and the
-`exponential`-vs-`interval` default) that the transparent path can't know.
-
-**Legacy filters** write a bare property name — `["==", "class", "primary"]`,
-`["in", "type", "a", "b"]` — where modern filters are boolean expressions. The
-`filter` module ports maplibre-style-spec's `feature_filter`:
+**Migrate a whole style** with `migrate`, the port of maplibre-style-spec's
+`migrate`. It walks every layer and rewrites filters, function objects and
+token strings using the embedded style-spec reference — the property's type,
+whether it interpolates, whether it takes tokens — so the output is exactly
+what the reference implementation produces. The MapLibre demo style is
+checked against `gl-style-migrate`'s output in the test suite.
 
 ```rust
-use maplibre_expr::filter::{convert_legacy_filter, is_expression_filter};
+use maplibre_expr::{migrate, parse, evaluate, EvaluationContext};
 use serde_json::json;
 
-let legacy = json!(["all", ["!=", "name", "International Date Line"]]);
-assert!(!is_expression_filter(&legacy));
+let style = json!({
+    "version": 8,
+    "layers": [{
+        "id": "label", "type": "symbol", "source": "s",
+        "layout": {
+            "text-field": "{name}",
+            "text-size": {"stops": [[2, 10], [6, 16]]},
+        },
+        "filter": ["!=", "name", ""],
+    }],
+});
+let style = migrate(&style).unwrap();
+let layer = &style["layers"][0];
+assert_eq!(layer["layout"]["text-field"], json!(["to-string", ["get", "name"]]));
+assert_eq!(
+    layer["layout"]["text-size"],
+    json!(["interpolate", ["linear"], ["zoom"], 2, 10, 6, 16])
+);
+assert_eq!(layer["filter"], json!(["!=", ["get", "name"], ""]));
 
-// → ["!=", ["get", "name"], "International Date Line"]
-let expr = convert_legacy_filter(&legacy).unwrap();
+let size = parse(&layer["layout"]["text-size"]).unwrap();
+let ctx = EvaluationContext::new().with_zoom(4.0);
+assert_eq!(evaluate(&size, &ctx).unwrap(), maplibre_expr::Value::Number(13.0));
 ```
 
-The conversion reproduces legacy semantics faithfully: strictly-typed
-comparisons that yield `false` on a type mismatch, the `$type` / `$id` keys, and
-the `typeof` guards that keep one `any` term from erroring out its siblings.
+`migrate::migrate_property(name, value)` does the same for one layout/paint
+value, and `migrate_with` / `migrate_property_with` accept a custom reference
+(a fork of the spec, say). Only `version: 8` styles are handled; the ancient
+v7 → v8 rewrite is not ported.
 
-To go straight from a filter — modern or legacy — to a parsed `Expr`, use
-`filter::parse_filter` (or `parse_filter_with` to pass `Options`). It mirrors
-MapLibre's `createFilter` by converting and then parsing:
-
-```rust
-use maplibre_expr::filter::parse_filter;
-use serde_json::json;
-
-// Bare "name" is a legacy property reference — auto-converted before parsing.
-let expr = parse_filter(&json!(["all", ["!=", "name", "International Date Line"]])).unwrap();
-```
-
-Plain `parse` would read the legacy form as a comparison of two literals, which
-either fails to type-check or silently evaluates against the wrong operands.
+**Without a spec**, `parse` still accepts a bare function object and converts
+it on the fly, and `filter::parse_filter` converts a legacy filter before
+parsing. This is a convenience for when you hold a single value and no spec:
+the converter then has to guess from the object alone, which — unlike
+`migrate` — cannot tell an interpolated `line-width` from a stepped
+`text-transform` and never expands tokens. Turn it off with
+`Options::convert_legacy(false)` to reject bare objects. The lower-level
+pieces are public too: `convert::convert_function(params, spec)`,
+`convert::convert_token_string`, and `filter::convert_legacy_filter`, which
+reproduces legacy filter semantics faithfully (strictly-typed comparisons that
+yield `false` on a type mismatch, the `$type` / `$id` keys, and the `typeof`
+guards that keep one `any` term from erroring out its siblings).
 
 ### Extensions
 

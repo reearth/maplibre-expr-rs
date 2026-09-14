@@ -138,7 +138,13 @@ fn fixup_degenerate_step(curve: &mut Vec<Json>) {
     }
 }
 
-fn convert_token_string(s: &str) -> Json {
+/// Convert a legacy `{token}` string — `"{name} ({ref})"` — to the equivalent
+/// expression: `["get", token]` for each token, concatenated with the literal
+/// spans between them (`["to-string", ["get", …]]` for a lone token, the input
+/// unchanged when it has no tokens). Only properties whose spec has `tokens:
+/// true` (`text-field`, `icon-image`) interpret strings this way; see
+/// [`migrate`](crate::migrate::migrate).
+pub fn convert_token_string(s: &str) -> Json {
     // Replace `{tokens}` with `["get", token]`, concatenating literal spans.
     let mut result: Vec<Json> = vec![json!("concat")];
     let bytes = s.as_bytes();
@@ -181,11 +187,14 @@ fn convert_identity(params: &Json, spec: &Json) -> Json {
         };
     }
     if spec_type == "enum" {
-        let keys: Vec<Json> = spec
-            .get("values")
-            .and_then(Json::as_object)
-            .map(|o| o.keys().map(|k| json!(k)).collect())
-            .unwrap_or_default();
+        // The full reference lists enum `values` as an object; the pruned
+        // reference embedded for `migrate` stores the keys as an array (in
+        // source order, which `serde_json`'s sorted maps would otherwise lose).
+        let keys: Vec<Json> = match spec.get("values") {
+            Some(Json::Object(o)) => o.keys().map(|k| json!(k)).collect(),
+            Some(Json::Array(a)) => a.clone(),
+            _ => Vec::new(),
+        };
         return json!(["match", get, keys, get, params.get("default")]);
     }
     let op = if spec_type == "color" {

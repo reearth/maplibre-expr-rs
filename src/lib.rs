@@ -45,6 +45,7 @@ mod eval;
 mod ext;
 pub mod filter;
 mod geometry;
+pub mod migrate;
 mod parse;
 mod typ;
 mod typecheck;
@@ -59,6 +60,7 @@ pub use filter::{
     convert_legacy_filter, is_expression_filter, parse_filter, parse_filter_with, FilterError,
     ParseFilterError,
 };
+pub use migrate::{migrate, MigrateError};
 pub use typ::Type;
 pub use value::{Projection, Value};
 

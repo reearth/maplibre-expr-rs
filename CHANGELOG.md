@@ -8,6 +8,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `migrate`: a port of maplibre-style-spec's `migrate` for `version: 8`
+  styles. It walks every layer and converts legacy filters, function objects
+  and `{token}` strings to expressions, and normalises non-standard `hsl()`
+  colors, using a pruned snapshot of the style-spec reference embedded in the
+  crate (`src/reference/v8.json`, refreshed with
+  `scripts/refresh_reference.sh`). With the property spec in hand the
+  conversion matches the reference implementation exactly, where the spec-less
+  transparent path in `parse` had to guess (numeric stops came out as `step`
+  instead of `interpolate`, tokens were never expanded). The MapLibre demo
+  style `globe.json` is vendored and its migration asserted equal to
+  `gl-style-migrate`'s output. Also `migrate::migrate_property` for a single
+  value, `migrate_with` / `migrate_property_with` for a custom reference,
+  `migrate::migrate_colors`, `migrate::reference` / `property_spec`, and
+  `convert::convert_token_string` is now public.
 - `filter::parse_filter` (and `parse_filter_with` for user `Options`) — a
   one-call convenience that combines `convert_legacy_filter` and `parse`, so a
   legacy layer filter (`["all", ["!=", "name", "International Date Line"]]`,
