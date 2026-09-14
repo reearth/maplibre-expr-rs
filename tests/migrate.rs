@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use maplibre_expr::filter::parse_filter;
 use maplibre_expr::migrate::{migrate, migrate_colors, migrate_property, property_spec};
 use maplibre_expr::{
-    evaluate, is_expression, parse, typecheck, EvaluationContext, Feature, MigrateError, Value,
+    evaluate, evaluate_with, is_expression, parse, parse_property, parse_property_with, typecheck,
+    EvaluationContext, Feature, MigrateError, Options, Value,
 };
 use serde_json::{json, Value as Json};
 
@@ -195,4 +196,65 @@ fn reference_is_embedded() {
     assert_eq!(property_spec("line-width").unwrap()["type"], "number");
     assert_eq!(property_spec("text-field").unwrap()["tokens"], true);
     assert!(property_spec("nope").is_none());
+}
+
+fn feature_with(key: &str, value: Value) -> EvaluationContext {
+    let mut props = BTreeMap::new();
+    props.insert(key.to_string(), value);
+    EvaluationContext::new().with_feature(Feature {
+        properties: props,
+        ..Feature::default()
+    })
+}
+
+#[test]
+fn parse_property_converts_with_the_property_spec() {
+    // Same stops: interpolated for a number property, stepped for an enum one.
+    let stops = json!({"stops": [[2, 10], [6, 16]]});
+    let width = parse_property("line-width", &stops).unwrap();
+    assert_eq!(
+        evaluate(&width, &EvaluationContext::new().with_zoom(4.0)).unwrap(),
+        Value::Number(13.0)
+    );
+    let spec_less = parse(&stops).unwrap();
+    assert_eq!(
+        evaluate(&spec_less, &EvaluationContext::new().with_zoom(4.0)).unwrap(),
+        Value::Number(10.0),
+        "without the spec the object is read as a step function"
+    );
+
+    // Token strings resolve against the feature.
+    let label = parse_property("text-field", &json!("{name}!")).unwrap();
+    assert_eq!(
+        evaluate(&label, &feature_with("name", Value::String("Tokyo".into()))).unwrap(),
+        Value::String("Tokyo!".into())
+    );
+    // …but only for token-accepting properties.
+    let font = parse_property("text-font", &json!("{name}")).unwrap();
+    assert_eq!(
+        evaluate(&font, &EvaluationContext::new()).unwrap(),
+        Value::String("{name}".into())
+    );
+    // Expressions and literals pass straight through.
+    let expr = parse_property("line-width", &json!(["*", ["get", "w"], 2])).unwrap();
+    assert_eq!(
+        evaluate(&expr, &feature_with("w", Value::Number(3.0))).unwrap(),
+        Value::Number(6.0)
+    );
+    let lit = parse_property("line-width", &json!(4)).unwrap();
+    assert_eq!(
+        evaluate(&lit, &EvaluationContext::new()).unwrap(),
+        Value::Number(4.0)
+    );
+}
+
+#[test]
+fn parse_property_with_accepts_options() {
+    let mut opts = Options::new();
+    opts.macro_def("double", vec!["x".into()], json!(["*", ["var", "x"], 2]));
+    let expr = parse_property_with("line-width", &json!(["double", 3]), &opts).unwrap();
+    assert_eq!(
+        evaluate_with(&expr, &EvaluationContext::new(), &opts).unwrap(),
+        Value::Number(6.0)
+    );
 }

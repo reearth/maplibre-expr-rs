@@ -65,8 +65,25 @@ pub use typ::Type;
 pub use value::{Projection, Value};
 
 /// Parse a MapLibre expression from its JSON representation.
+///
+/// A bare *function object* (`{ "stops": … }`) is converted to an expression
+/// first (unless disabled with [`Options::convert_legacy`]) — but without
+/// knowing which property the value belongs to, that conversion has to guess
+/// from the object alone and can differ from MapLibre's. When you know the
+/// property, use [`parse_property`], which converts with its spec like
+/// MapLibre does.
 pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
     parse::parse(json, &Options::default())
+}
+
+/// Parse the value of a layout/paint property — a modern expression, a legacy
+/// function object, a `{token}` string, or a plain literal — the way MapLibre
+/// reads it: legacy forms are converted with the property's spec from the
+/// embedded style-spec reference (see [`migrate::migrate_property`]) and then
+/// parsed. The counterpart of MapLibre's `createPropertyExpression(value,
+/// propertySpec)`; `name` is the property name, e.g. `"line-width"`.
+pub fn parse_property(name: &str, json: &serde_json::Value) -> Result<Expr, ParseError> {
+    parse_property_with(name, json, &Options::default())
 }
 
 /// Whether `json` is a MapLibre *expression* — an array whose first element
@@ -94,6 +111,15 @@ pub fn is_expression(json: &serde_json::Value) -> bool {
 /// operators).
 pub fn parse_with(json: &serde_json::Value, options: &Options) -> Result<Expr, ParseError> {
     parse::parse(json, options)
+}
+
+/// [`parse_property`] with user [`Options`].
+pub fn parse_property_with(
+    name: &str,
+    json: &serde_json::Value,
+    options: &Options,
+) -> Result<Expr, ParseError> {
+    parse::parse(&migrate::migrate_property(name, json), options)
 }
 
 /// Statically type-check a parsed expression, optionally against the type a

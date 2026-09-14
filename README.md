@@ -119,14 +119,28 @@ value, and `migrate_with` / `migrate_property_with` accept a custom reference
 (a fork of the spec, say). Only `version: 8` styles are handled; the ancient
 v7 → v8 rewrite is not ported.
 
-**Without a spec**, `parse` still accepts a bare function object and converts
-it on the fly, and `filter::parse_filter` converts a legacy filter before
-parsing. This is a convenience for when you hold a single value and no spec:
-the converter then has to guess from the object alone, which — unlike
-`migrate` — cannot tell an interpolated `line-width` from a stepped
-`text-transform` and never expands tokens. Turn it off with
-`Options::convert_legacy(false)` to reject bare objects. The lower-level
-pieces are public too: `convert::convert_function(params, spec)`,
+**Parse a single property value** with `parse_property(name, value)`, the
+counterpart of MapLibre's `createPropertyExpression(value, propertySpec)`: it
+converts a function object or token string with the property's spec from the
+embedded reference, then parses, so one value comes out exactly as it would
+from a migrated style.
+
+```rust
+use maplibre_expr::{parse_property, evaluate, EvaluationContext, Value};
+use serde_json::json;
+
+let width = parse_property("line-width", &json!({"stops": [[2, 10], [6, 16]]})).unwrap();
+let ctx = EvaluationContext::new().with_zoom(4.0);
+assert_eq!(evaluate(&width, &ctx).unwrap(), Value::Number(13.0)); // interpolated
+```
+
+Plain `parse` also accepts a bare function object, but without knowing the
+property it has to guess from the object alone — which, unlike MapLibre, reads
+numeric stops as a `step` and never expands tokens. Prefer `parse_property`
+whenever you know the property name; `Options::convert_legacy(false)` makes
+`parse` reject bare objects instead. `filter::parse_filter` converts a legacy
+filter before parsing exactly as MapLibre's `createFilter` does (no spec is
+involved). The lower-level pieces are public too: `convert::convert_function`,
 `convert::convert_token_string`, and `filter::convert_legacy_filter`, which
 reproduces legacy filter semantics faithfully (strictly-typed comparisons that
 yield `false` on a type mismatch, the `$type` / `$id` keys, and the `typeof`

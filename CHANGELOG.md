@@ -22,6 +22,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   value, `migrate_with` / `migrate_property_with` for a custom reference,
   `migrate::migrate_colors`, `migrate::reference` / `property_spec`, and
   `convert::convert_token_string` is now public.
+- `parse_property(name, value)` / `parse_property_with`: parse one
+  layout/paint value the way MapLibre's `createPropertyExpression` reads it —
+  legacy function objects and `{token}` strings are converted with the
+  property's spec from the embedded reference, then parsed. Plain `parse`
+  keeps its spec-less transparent conversion, now documented as a guess that
+  can differ from MapLibre (numeric stops read as `step`, tokens untouched).
 - `filter::parse_filter` (and `parse_filter_with` for user `Options`) — a
   one-call convenience that combines `convert_legacy_filter` and `parse`, so a
   legacy layer filter (`["all", ["!=", "name", "International Date Line"]]`,
