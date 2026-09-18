@@ -686,3 +686,28 @@ fn at_out_of_bounds_reports_the_last_valid_index() {
         "",
     );
 }
+
+// ---------------------------------------------------------------------------
+// `format`'s first-argument guard follows JS `typeof null === "object"`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_rejects_a_null_first_argument() {
+    // `format.ts:48` guards with `!Array.isArray(a) && typeof a === 'object'`,
+    // which is true for `null` as well as for a bare options object.
+    assert_err(
+        json!(["format", null]),
+        "First argument must be an image or text section.",
+        "",
+    );
+    assert_err(
+        json!(["format", { "font-scale": 2 }]),
+        "First argument must be an image or text section.",
+        "",
+    );
+    // A string and an expression remain valid section content. (A bare number
+    // is rejected later, by the formatted-text type check, not by this guard.)
+    assert_ok(json!(["format", "a"]));
+    assert_ok(json!(["format", ["get", "name"]]));
+    assert_ok(json!(["format", "a", { "font-scale": 2 }]));
+}

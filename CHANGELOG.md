@@ -71,6 +71,10 @@ read *Changed* before upgrading.
   `rgb(300, 0, 0)` is opaque red. In the other direction the named-color table
   grows from 18 names to the full CSS list of 148, so many colors that used to
   fail now parse.
+- **Breaking:** `["format", null]` is rejected. Upstream guards its first
+  argument with `!Array.isArray(a) && typeof a === 'object'`, and JavaScript
+  reports `typeof null` as `"object"`, so a leading `null` fails there just
+  like a bare options object does.
 - **Breaking:** `config`, `measure-light`, `raster-value` and
   `sky-radial-progress` are not in upstream's registry and are no longer
   accepted.

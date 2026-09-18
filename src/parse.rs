@@ -924,7 +924,11 @@ fn parse_format(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.is_empty() {
         return Err(ParseError::of(ParseErrorKind::ExpectedAtLeastOneArgument));
     }
-    if args[0].is_object() {
+    // Upstream's guard is `!Array.isArray(firstArg) && typeof firstArg ===
+    // 'object'` (`format.ts:48`), and JS reports `typeof null` as `"object"`,
+    // so a leading `null` is rejected here too — not just a bare options
+    // object.
+    if args[0].is_object() || args[0].is_null() {
         return Err(ParseError::of(ParseErrorKind::FormatFirstSection));
     }
     let mut sections: Vec<FormatArg> = Vec::new();
