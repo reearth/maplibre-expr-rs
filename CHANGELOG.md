@@ -4,6 +4,20 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2]
+
+### Fixed
+
+- `["all", …]` and `["any", …]` rejected more than two arguments with
+  `Expected 0 to 2 arguments, but found N instead.`, a regression introduced
+  in 0.5.0. Both carry two overloads upstream — `(boolean, boolean)` and
+  varargs — and deriving the argument ceiling from that table used
+  `Option`'s own ordering, where `None` sorts *below* every `Some`, so the
+  varargs overload lost to the two-argument one. Four-way `all` is ordinary in
+  real styles (`["all", ["==", …], ["==", …], ["!=", …], ["!=", …]]`), and
+  every vendored fixture happens to use exactly two arguments, so nothing in
+  the conformance suite covered it. It is covered now.
+
 ## [0.5.1]
 
 Finishes the 0.5.0 collation. Four behaviours had been left explicitly

@@ -469,11 +469,15 @@ fn arity(op: &str) -> Option<(usize, Option<usize>)> {
             .map(|(params, _)| params.unwrap_or(0))
             .min()
             .unwrap_or(0);
-        let max = overloads
-            .iter()
-            .map(|(params, _)| *params)
-            .max()
-            .unwrap_or(None);
+        // `Option`'s own `Ord` would sink the varargs overload: `None` sorts
+        // *below* every `Some`, so `[Some(2), None].max()` is `Some(2)` and
+        // `all`/`any` would cap at two arguments. The varargs case has to win
+        // explicitly.
+        let max = if overloads.iter().any(|(params, _)| params.is_none()) {
+            None
+        } else {
+            overloads.iter().filter_map(|(params, _)| *params).max()
+        };
         return Some((min, max));
     }
     Some(match op {
