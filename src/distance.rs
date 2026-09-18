@@ -57,10 +57,16 @@ impl Ruler {
         (dx * dx + dy * dy).sqrt()
     }
 
-    /// The nearest point on `line` to `p`.
+    /// The nearest point on `line` to `p`, or `(NaN, NaN)` when `line` has no
+    /// segments.
+    ///
+    /// Upstream's loop is `for (i = 0; i < line.length - 1; i++)` over locals
+    /// left `undefined` before it, so a line of 0 or 1 points yields
+    /// `[undefined, undefined]` and every distance derived from it is `NaN`.
+    /// Seeding from `line[0]` instead would panic on an empty line.
     fn point_on_line(&self, line: &[P], p: P) -> P {
         let mut min_dist = f64::INFINITY;
-        let mut best = line[0];
+        let mut best = (f64::NAN, f64::NAN);
         for seg in line.windows(2) {
             let (mut x, mut y) = seg[0];
             let mut dx = Self::wrap(seg[1].0 - x) * self.kx;
@@ -98,9 +104,34 @@ fn segment_to_segment(p1: P, p2: P, q1: P, q2: P, ruler: &Ruler) -> f64 {
     d1.min(d2)
 }
 
+/// `Math.min`: unlike Rust's `f64::min`, a `NaN` operand wins.
+///
+/// Needed wherever a `NaN` produced by a degenerate (empty / single-point)
+/// geometry has to reach the caller instead of being silently discarded.
+fn js_min(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.min(b)
+    }
+}
+
 /// Distance between two point sets, each optionally interpreted as a polyline.
 fn set_to_set(a: &[P], a_line: bool, b: &[P], b_line: bool, ruler: &Ruler) -> f64 {
-    match (a_line, b_line) {
+    // Upstream's `pointSetToPointSetDistance` seeds its running minimum with
+    // `ruler.distance(pointSet1[0], pointSet2[0])`, which is what makes a
+    // degenerate single-point "line" (no segments to iterate) still yield a
+    // finite answer. An empty set has no `[0]`: upstream would read `undefined`
+    // and produce NaN, so that is what we return.
+    let (Some(&a0), Some(&b0)) = (a.first(), b.first()) else {
+        return f64::NAN;
+    };
+    let seed = ruler.distance(a0, b0);
+    if seed == 0.0 {
+        return 0.0;
+    }
+
+    let body = match (a_line, b_line) {
         (true, true) => {
             let mut dist = f64::INFINITY;
             for pa in a.windows(2) {
@@ -116,11 +147,11 @@ fn set_to_set(a: &[P], a_line: bool, b: &[P], b_line: bool, ruler: &Ruler) -> f6
         (true, false) => b
             .iter()
             .map(|&p| point_to_line(p, a, ruler))
-            .fold(f64::INFINITY, f64::min),
+            .fold(f64::INFINITY, js_min),
         (false, true) => a
             .iter()
             .map(|&p| point_to_line(p, b, ruler))
-            .fold(f64::INFINITY, f64::min),
+            .fold(f64::INFINITY, js_min),
         (false, false) => {
             let mut dist = f64::INFINITY;
             for &pa in a {
@@ -133,7 +164,8 @@ fn set_to_set(a: &[P], a_line: bool, b: &[P], b_line: bool, ruler: &Ruler) -> f6
             }
             dist
         }
-    }
+    };
+    js_min(seed, body)
 }
 
 fn point_to_polygon(point: P, polygon: &[Vec<P>], ruler: &Ruler) -> f64 {
@@ -210,14 +242,27 @@ fn polygon_to_polygon(a: &[Vec<P>], b: &[Vec<P>], ruler: &Ruler) -> f64 {
 
 /// Distance from a point set (or polyline) to a polygon.
 fn points_to_polygon(points: &[P], is_line: bool, polygon: &[Vec<P>], ruler: &Ruler) -> f64 {
-    if is_line {
+    // As in `set_to_set`, upstream's `pointsToPolygonDistance` seeds its
+    // running minimum — here with `ruler.distance(points[0], polygon[0][0])` —
+    // so a degenerate single-point "line" still yields a finite answer, and an
+    // empty point set or empty first ring yields NaN rather than a panic.
+    let (Some(&p0), Some(&q0)) = (points.first(), polygon.first().and_then(|r| r.first())) else {
+        return f64::NAN;
+    };
+    let seed = ruler.distance(p0, q0);
+    if seed == 0.0 {
+        return 0.0;
+    }
+
+    let body = if is_line {
         line_to_polygon(points, polygon, ruler)
     } else {
         points
             .iter()
             .map(|&p| point_to_polygon(p, polygon, ruler))
-            .fold(f64::INFINITY, f64::min)
-    }
+            .fold(f64::INFINITY, js_min)
+    };
+    js_min(seed, body)
 }
 
 fn signed_area(ring: &[P]) -> f64 {
@@ -284,11 +329,14 @@ pub fn distance(feature_geom: &[Vec<P>], geom_type: &str, z: u32, args: &[Simple
             let ruler = Ruler::new(pts[0].1);
             let mut dist = f64::INFINITY;
             for g in args {
-                dist = dist.min(match g {
-                    SimpleGeom::Point(p) => set_to_set(&pts, is_line, &[*p], false, &ruler),
-                    SimpleGeom::Line(l) => set_to_set(&pts, is_line, l, true, &ruler),
-                    SimpleGeom::Polygon(poly) => points_to_polygon(&pts, is_line, poly, &ruler),
-                });
+                dist = js_min(
+                    dist,
+                    match g {
+                        SimpleGeom::Point(p) => set_to_set(&pts, is_line, &[*p], false, &ruler),
+                        SimpleGeom::Line(l) => set_to_set(&pts, is_line, l, true, &ruler),
+                        SimpleGeom::Polygon(poly) => points_to_polygon(&pts, is_line, poly, &ruler),
+                    },
+                );
                 if dist == 0.0 {
                     return 0.0;
                 }
@@ -312,11 +360,14 @@ pub fn distance(feature_geom: &[Vec<P>], geom_type: &str, z: u32, args: &[Simple
             let mut dist = f64::INFINITY;
             for g in args {
                 for poly in &polygons {
-                    dist = dist.min(match g {
-                        SimpleGeom::Point(p) => points_to_polygon(&[*p], false, poly, &ruler),
-                        SimpleGeom::Line(l) => points_to_polygon(l, true, poly, &ruler),
-                        SimpleGeom::Polygon(other) => polygon_to_polygon(poly, other, &ruler),
-                    });
+                    dist = js_min(
+                        dist,
+                        match g {
+                            SimpleGeom::Point(p) => points_to_polygon(&[*p], false, poly, &ruler),
+                            SimpleGeom::Line(l) => points_to_polygon(l, true, poly, &ruler),
+                            SimpleGeom::Polygon(other) => polygon_to_polygon(poly, other, &ruler),
+                        },
+                    );
                     if dist == 0.0 {
                         return 0.0;
                     }

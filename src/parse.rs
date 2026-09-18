@@ -1,5 +1,7 @@
 //! Turning raw JSON (`serde_json::Value`) into an [`Expr`] tree.
 
+use std::cell::Cell;
+
 use serde_json::Value as Json;
 
 use crate::ast::{Expr, FormatArg, InterpKind, InterpSpace};
@@ -11,12 +13,91 @@ use crate::value::Value;
 /// Valid `vertical-align` option values for the `format` operator.
 const VERTICAL_ALIGN: [&str; 3] = ["bottom", "center", "top"];
 
+/// Maximum nesting depth of the JSON expression tree accepted by the parser.
+///
+/// Parsing is recursive descent over the native stack, so deep enough input
+/// would overflow it (an abort, not an error). The bound is set from measured
+/// frame cost: a level costs roughly 10 KiB in a debug build and 1–2 KiB in a
+/// release build, so a debug parse on Rust's default 2 MiB spawned-thread stack
+/// runs out somewhere between 150 and 200 levels. 100 keeps a comfortable
+/// margin there while staying far above any realistic style — MapLibre's own
+/// expression fixtures nest only a handful of levels deep.
+///
+/// Unrelated to the macro-expansion bound ([`MAX_MACRO_DEPTH`]), and with no
+/// counterpart upstream: MapLibre's `ParsingContext` imposes no depth limit.
+pub(crate) const MAX_NEST_DEPTH: usize = 100;
+
 type Result<T> = std::result::Result<T, ParseError>;
+
+/// Per-parse state: the (shared, immutable) extension registry plus the depth
+/// counters of the parse currently in progress.
+///
+/// The counters live here — one `Ctx` per top-level [`parse`] call — and never
+/// on [`Options`], so the same `&Options` can be parsed against concurrently
+/// from several threads without one parse's depth leaking into another's.
+struct Ctx<'a> {
+    opts: &'a Options,
+    /// Current JSON nesting depth (see [`MAX_NEST_DEPTH`]).
+    nest: Cell<usize>,
+    /// Current macro-expansion depth (see [`MAX_MACRO_DEPTH`]).
+    macro_depth: Cell<usize>,
+}
+
+/// Restores a depth counter when the parse of a nested level returns, by any
+/// path (including `?`).
+struct DepthGuard<'a>(&'a Cell<usize>);
+
+impl Drop for DepthGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
+impl<'a> Ctx<'a> {
+    fn new(opts: &'a Options) -> Ctx<'a> {
+        Ctx {
+            opts,
+            nest: Cell::new(0),
+            macro_depth: Cell::new(0),
+        }
+    }
+
+    /// Enter one more level of JSON nesting, or error if that would exceed
+    /// [`MAX_NEST_DEPTH`].
+    fn enter_nest(&self) -> Result<DepthGuard<'_>> {
+        if self.nest.get() >= MAX_NEST_DEPTH {
+            return Err(ParseError::of(ParseErrorKind::NestingTooDeep {
+                max: MAX_NEST_DEPTH,
+            }));
+        }
+        self.nest.set(self.nest.get() + 1);
+        Ok(DepthGuard(&self.nest))
+    }
+
+    /// Enter one more level of macro expansion of `op`, or error if that would
+    /// exceed [`MAX_MACRO_DEPTH`].
+    fn enter_macro(&self, op: &str) -> Result<DepthGuard<'_>> {
+        if self.macro_depth.get() >= MAX_MACRO_DEPTH {
+            return Err(ParseError::of(ParseErrorKind::MacroDepth {
+                op: op.to_string(),
+            }));
+        }
+        self.macro_depth.set(self.macro_depth.get() + 1);
+        Ok(DepthGuard(&self.macro_depth))
+    }
+}
 
 /// Parse a MapLibre expression from JSON.
 pub fn parse(json: &Json, opts: &Options) -> Result<Expr> {
+    parse_expr(json, &Ctx::new(opts))
+}
+
+fn parse_expr(json: &Json, ctx: &Ctx<'_>) -> Result<Expr> {
     match json {
-        Json::Array(items) => parse_array(items, opts),
+        Json::Array(items) => {
+            let _guard = ctx.enter_nest()?;
+            parse_array(items, ctx)
+        }
         // As in MapLibre's `createExpression`, an object is never an expression
         // here — legacy function objects are converted with their property spec
         // beforehand (`parse_property` / `migrate`), not guessed at spec-less.
@@ -27,14 +108,14 @@ pub fn parse(json: &Json, opts: &Options) -> Result<Expr> {
 
 /// Parse each element of `args` as an expression, tagging errors with the
 /// argument's location (its index in the enclosing array).
-fn parse_all(args: &[Json], opts: &Options) -> Result<Vec<Expr>> {
+fn parse_all(args: &[Json], ctx: &Ctx<'_>) -> Result<Vec<Expr>> {
     args.iter()
         .enumerate()
-        .map(|(i, a)| parse(a, opts).map_err(|e| e.at(i + 1)))
+        .map(|(i, a)| parse_expr(a, ctx).map_err(|e| e.at(i + 1)))
         .collect()
 }
 
-fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
+fn parse_array(items: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     let first = items
         .first()
         .ok_or_else(|| ParseError::of(ParseErrorKind::EmptyArray))?;
@@ -49,10 +130,10 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
 
     // User macros expand at parse time; expression and external functions
     // become ordinary calls that the evaluator dispatches.
-    if opts.macros.contains_key(op) {
-        return expand_macro(op, args, opts);
+    if ctx.opts.macros.contains_key(op) {
+        return expand_macro(op, args, ctx);
     }
-    if let Some(f) = opts.expr_fns.get(op) {
+    if let Some(f) = ctx.opts.expr_fns.get(op) {
         if args.len() != f.params.len() {
             return Err(ParseError::of(ParseErrorKind::ExtArgCount {
                 kind: "Expression function",
@@ -63,10 +144,10 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
         }
         return Ok(Expr::Call {
             op: op.to_string(),
-            args: parse_all(args, opts)?,
+            args: parse_all(args, ctx)?,
         });
     }
-    if let Some((arity, _)) = opts.externals.get(op) {
+    if let Some((arity, _)) = ctx.opts.externals.get(op) {
         if args.len() != *arity {
             return Err(ParseError::of(ParseErrorKind::ExtArgCount {
                 kind: "External function",
@@ -77,7 +158,7 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
         }
         return Ok(Expr::Call {
             op: op.to_string(),
-            args: parse_all(args, opts)?,
+            args: parse_all(args, ctx)?,
         });
     }
 
@@ -86,7 +167,7 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
             expect_arity(op, args, 1)?;
             Ok(Expr::Literal(Value::from_json(&args[0])))
         }
-        "let" => parse_let(args, opts),
+        "let" => parse_let(args, ctx),
         "var" => {
             expect_arity(op, args, 1)?;
             let name = args[0]
@@ -94,14 +175,14 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
                 .ok_or_else(|| ParseError::of(ParseErrorKind::VarBindingName))?;
             Ok(Expr::Var(name.to_string()))
         }
-        "match" => parse_match(args, opts),
-        "step" => parse_step(args, opts),
-        "interpolate" => parse_interpolate(InterpSpace::Rgb, args, opts),
-        "interpolate-hcl" => parse_interpolate(InterpSpace::Hcl, args, opts),
-        "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args, opts),
-        "format" => parse_format(args, opts),
-        "collator" => parse_collator(args, opts),
-        "number-format" => parse_number_format(args, opts),
+        "match" => parse_match(args, ctx),
+        "step" => parse_step(args, ctx),
+        "interpolate" => parse_interpolate(InterpSpace::Rgb, args, ctx),
+        "interpolate-hcl" => parse_interpolate(InterpSpace::Hcl, args, ctx),
+        "interpolate-lab" => parse_interpolate(InterpSpace::Lab, args, ctx),
+        "format" => parse_format(args, ctx),
+        "collator" => parse_collator(args, ctx),
+        "number-format" => parse_number_format(args, ctx),
         "within" => parse_within(args),
         "distance" => parse_distance(args),
         "global-state" => {
@@ -115,13 +196,13 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
             }
             Ok(Expr::Call {
                 op: op.to_string(),
-                args: parse_all(args, opts)?,
+                args: parse_all(args, ctx)?,
             })
         }
         "array" => {
             check_generic_arity(op, args.len())?;
             validate_array_type_args(args)?;
-            let parsed = parse_all(args, opts)?;
+            let parsed = parse_all(args, ctx)?;
             Ok(Expr::Call {
                 op: op.to_string(),
                 args: parsed,
@@ -132,7 +213,7 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
                 return Err(e);
             }
             check_generic_arity(op, args.len())?;
-            let args = parse_all(args, opts)?;
+            let args = parse_all(args, ctx)?;
             Ok(Expr::Call {
                 op: op.to_string(),
                 args,
@@ -142,9 +223,10 @@ fn parse_array(items: &[Json], opts: &Options) -> Result<Expr> {
 }
 
 /// Expand a macro call into a `let` binding its parameters to the arguments,
-/// guarding against recursive macros with a depth limit.
-fn expand_macro(op: &str, args: &[Json], opts: &Options) -> Result<Expr> {
-    let m = &opts.macros[op];
+/// bounding expansion with a per-parse nesting-depth limit (which a recursive
+/// macro reaches, but so can deeply nested non-recursive ones).
+fn expand_macro(op: &str, args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
+    let m = &ctx.opts.macros[op];
     if args.len() != m.params.len() {
         return Err(ParseError::of(ParseErrorKind::ExtArgCount {
             kind: "Macro",
@@ -153,25 +235,14 @@ fn expand_macro(op: &str, args: &[Json], opts: &Options) -> Result<Expr> {
             found: args.len(),
         }));
     }
-    use std::sync::atomic::Ordering::Relaxed;
-    let depth = opts.depth.load(Relaxed);
-    if depth >= MAX_MACRO_DEPTH {
-        return Err(ParseError::of(ParseErrorKind::MacroDepth {
-            op: op.to_string(),
-        }));
-    }
-    opts.depth.store(depth + 1, Relaxed);
-    let result = (|| {
-        let arg_exprs = parse_all(args, opts)?;
-        let body = parse(&m.body, opts)?;
-        let bindings = m.params.iter().cloned().zip(arg_exprs).collect();
-        Ok(Expr::Let {
-            bindings,
-            body: Box::new(body),
-        })
-    })();
-    opts.depth.store(depth, Relaxed);
-    result
+    let _guard = ctx.enter_macro(op)?;
+    let arg_exprs = parse_all(args, ctx)?;
+    let body = parse_expr(&m.body, ctx)?;
+    let bindings = m.params.iter().cloned().zip(arg_exprs).collect();
+    Ok(Expr::Let {
+        bindings,
+        body: Box::new(body),
+    })
 }
 
 /// JavaScript's `typeof` for a JSON value: arrays, objects and `null` all
@@ -346,7 +417,7 @@ pub(crate) fn is_operator(op: &str) -> bool {
     ) || arity(op).is_some()
 }
 
-fn parse_let(args: &[Json], opts: &Options) -> Result<Expr> {
+fn parse_let(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.is_empty() || args.len().is_multiple_of(2) {
         return Err(ParseError::of(ParseErrorKind::ExpectedOddArgsLet));
     }
@@ -356,17 +427,17 @@ fn parse_let(args: &[Json], opts: &Options) -> Result<Expr> {
         let name = args[i]
             .as_str()
             .ok_or_else(|| ParseError::of(ParseErrorKind::LetBindingNameString))?;
-        bindings.push((name.to_string(), parse(&args[i + 1], opts)?));
+        bindings.push((name.to_string(), parse_expr(&args[i + 1], ctx)?));
         i += 2;
     }
-    let body = parse(&args[args.len() - 1], opts)?;
+    let body = parse_expr(&args[args.len() - 1], ctx)?;
     Ok(Expr::Let {
         bindings,
         body: Box::new(body),
     })
 }
 
-fn parse_match(args: &[Json], opts: &Options) -> Result<Expr> {
+fn parse_match(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     // args = input, (label, output)+, default  =>  even count, >= 4.
     if args.len() < 4 {
         return Err(ParseError::of(ParseErrorKind::MatchAtLeast4 {
@@ -379,16 +450,16 @@ fn parse_match(args: &[Json], opts: &Options) -> Result<Expr> {
         }));
     }
     // Positions: op[0], input[1], label0[2], out0[3], ..., default[len].
-    let input = parse(&args[0], opts).map_err(|e| e.at(1))?;
+    let input = parse_expr(&args[0], ctx).map_err(|e| e.at(1))?;
     let mut arms = Vec::new();
     let mut i = 1;
     while i + 1 < args.len() {
         let labels = parse_match_labels(&args[i]).map_err(|e| e.at(i + 1))?;
-        let output = parse(&args[i + 1], opts).map_err(|e| e.at(i + 2))?;
+        let output = parse_expr(&args[i + 1], ctx).map_err(|e| e.at(i + 2))?;
         arms.push((labels, output));
         i += 2;
     }
-    let default = parse(&args[args.len() - 1], opts).map_err(|e| e.at(args.len()))?;
+    let default = parse_expr(&args[args.len() - 1], ctx).map_err(|e| e.at(args.len()))?;
     Ok(Expr::Match {
         input: Box::new(input),
         arms,
@@ -405,22 +476,25 @@ fn parse_match_labels(json: &Json) -> Result<Vec<Value>> {
     }
 }
 
-fn parse_step(args: &[Json], opts: &Options) -> Result<Expr> {
+fn parse_step(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.len() < 3 || args.len() % 2 == 1 {
         return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs {
             op: "step",
         }));
     }
     // Positions: op[0], input[1], output0[2], stop[3], output[4], ...
-    let input = parse(&args[0], opts).map_err(|e| e.at(1))?;
-    let output0 = parse(&args[1], opts).map_err(|e| e.at(2))?;
+    let input = parse_expr(&args[0], ctx).map_err(|e| e.at(1))?;
+    let output0 = parse_expr(&args[1], ctx).map_err(|e| e.at(2))?;
     let mut stops = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
         let stop = args[i]
             .as_f64()
             .ok_or_else(|| ParseError::of(ParseErrorKind::StepStopNumber))?;
-        stops.push((stop, parse(&args[i + 1], opts).map_err(|e| e.at(i + 2))?));
+        stops.push((
+            stop,
+            parse_expr(&args[i + 1], ctx).map_err(|e| e.at(i + 2))?,
+        ));
         i += 2;
     }
     check_ascending("step", &stops)?;
@@ -431,7 +505,7 @@ fn parse_step(args: &[Json], opts: &Options) -> Result<Expr> {
     })
 }
 
-fn parse_interpolate(space: InterpSpace, args: &[Json], opts: &Options) -> Result<Expr> {
+fn parse_interpolate(space: InterpSpace, args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.len() < 4 || args.len() % 2 == 1 {
         return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs {
             op: "interpolate",
@@ -439,14 +513,17 @@ fn parse_interpolate(space: InterpSpace, args: &[Json], opts: &Options) -> Resul
     }
     // Positions: op[0], kind[1], input[2], stop[3], output[4], ...
     let kind = parse_interp_kind(&args[0]).map_err(|e| e.at(1))?;
-    let input = parse(&args[1], opts).map_err(|e| e.at(2))?;
+    let input = parse_expr(&args[1], ctx).map_err(|e| e.at(2))?;
     let mut stops = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
         let stop = args[i]
             .as_f64()
             .ok_or_else(|| ParseError::of(ParseErrorKind::InterpolationStopNumber))?;
-        stops.push((stop, parse(&args[i + 1], opts).map_err(|e| e.at(i + 2))?));
+        stops.push((
+            stop,
+            parse_expr(&args[i + 1], ctx).map_err(|e| e.at(i + 2))?,
+        ));
         i += 2;
     }
     check_ascending("interpolate", &stops)?;
@@ -461,7 +538,7 @@ fn parse_interpolate(space: InterpSpace, args: &[Json], opts: &Options) -> Resul
 
 /// Parse `["within", geojson]`, extracting polygon rings (as `[lng, lat]`)
 /// from a Polygon, MultiPolygon, Feature, or FeatureCollection.
-fn parse_collator(args: &[Json], opts: &Options) -> Result<Expr> {
+fn parse_collator(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.len() != 1 {
         return Err(ParseError::of(ParseErrorKind::CollatorOneArg));
     }
@@ -470,7 +547,7 @@ fn parse_collator(args: &[Json], opts: &Options) -> Result<Expr> {
         .ok_or_else(|| ParseError::of(ParseErrorKind::CollatorOptions))?;
     let opt = |key: &str| -> Result<Option<Box<Expr>>> {
         match obj.get(key) {
-            Some(v) => Ok(Some(Box::new(parse(v, opts)?))),
+            Some(v) => Ok(Some(Box::new(parse_expr(v, ctx)?))),
             None => Ok(None),
         }
     };
@@ -481,11 +558,11 @@ fn parse_collator(args: &[Json], opts: &Options) -> Result<Expr> {
     })
 }
 
-fn parse_number_format(args: &[Json], opts: &Options) -> Result<Expr> {
+fn parse_number_format(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.len() != 2 {
         return Err(ParseError::of(ParseErrorKind::NumberFormatTwoArgs));
     }
-    let value = Box::new(parse(&args[0], opts)?);
+    let value = Box::new(parse_expr(&args[0], ctx)?);
     let obj = args[1]
         .as_object()
         .ok_or_else(|| ParseError::of(ParseErrorKind::NumberFormatOptionsObject))?;
@@ -494,7 +571,7 @@ fn parse_number_format(args: &[Json], opts: &Options) -> Result<Expr> {
     }
     let opt = |key: &str| -> Result<Option<Box<Expr>>> {
         match obj.get(key) {
-            Some(v) => Ok(Some(Box::new(parse(v, opts)?))),
+            Some(v) => Ok(Some(Box::new(parse_expr(v, ctx)?))),
             None => Ok(None),
         }
     };
@@ -683,7 +760,7 @@ fn parse_polygon(rings: &[Json]) -> Option<Vec<Vec<(f64, f64)>>> {
     Some(out)
 }
 
-fn parse_format(args: &[Json], opts: &Options) -> Result<Expr> {
+fn parse_format(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.is_empty() {
         return Err(ParseError::of(ParseErrorKind::FormatAtLeastOne));
     }
@@ -703,13 +780,13 @@ fn parse_format(args: &[Json], opts: &Options) -> Result<Expr> {
             let sec = content_pos;
             let section = sections.last_mut().unwrap();
             if let Some(v) = obj.get("font-scale") {
-                section.scale = Some(parse(v, opts).map_err(|e| e.at(sec))?);
+                section.scale = Some(parse_expr(v, ctx).map_err(|e| e.at(sec))?);
             }
             if let Some(v) = obj.get("text-font") {
-                section.font = Some(parse(v, opts).map_err(|e| e.at(sec))?);
+                section.font = Some(parse_expr(v, ctx).map_err(|e| e.at(sec))?);
             }
             if let Some(v) = obj.get("text-color") {
-                section.text_color = Some(parse(v, opts).map_err(|e| e.at(sec))?);
+                section.text_color = Some(parse_expr(v, ctx).map_err(|e| e.at(sec))?);
             }
             if let Some(v) = obj.get("vertical-align") {
                 if let Some(s) = v.as_str() {
@@ -719,12 +796,12 @@ fn parse_format(args: &[Json], opts: &Options) -> Result<Expr> {
                         }));
                     }
                 }
-                section.vertical_align = Some(parse(v, opts).map_err(|e| e.at(sec))?);
+                section.vertical_align = Some(parse_expr(v, ctx).map_err(|e| e.at(sec))?);
             }
         } else {
             content_pos = pos;
             sections.push(FormatArg {
-                content: parse(arg, opts).map_err(|e| e.at(pos))?,
+                content: parse_expr(arg, ctx).map_err(|e| e.at(pos))?,
                 scale: None,
                 font: None,
                 text_color: None,

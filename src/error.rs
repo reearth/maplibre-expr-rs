@@ -114,8 +114,10 @@ pub enum ParseErrorKind {
         expected: usize,
         found: usize,
     },
-    /// A macro expanded past the recursion-depth limit.
+    /// A macro expanded past the macro nesting-depth limit.
     MacroDepth { op: String },
+    /// The expression nested deeper than the parser's nesting-depth limit.
+    NestingTooDeep { max: usize },
     /// An `interpolate` stop input was not a number literal.
     InterpolationStopNumber,
     /// A `step` stop input was not a number literal.
@@ -282,9 +284,17 @@ impl fmt::Display for ParseErrorKind {
                 expected,
                 found,
             } => write!(f, "{kind} '{op}' expects {expected} argument(s), found {found}."),
-            ParseErrorKind::MacroDepth { op } => {
-                write!(f, "Macro expansion too deep expanding '{op}' (recursive macro?).")
-            }
+            ParseErrorKind::MacroDepth { op } => write!(
+                f,
+                "Macro expansion nested more than {} levels deep while expanding '{op}'; \
+                 nesting this deep, or a macro that expands to itself, reaches this limit.",
+                crate::ext::MAX_MACRO_DEPTH
+            ),
+            ParseErrorKind::NestingTooDeep { max } => write!(
+                f,
+                "Expression nested more than {max} levels deep; the parser accepts at most \
+                 {max} levels of nesting."
+            ),
             ParseErrorKind::InterpolationStopNumber => {
                 write!(f, "Interpolation stop inputs must be numbers.")
             }

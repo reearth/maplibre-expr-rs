@@ -788,3 +788,161 @@ fn type_mismatch_semantics_in_any() {
     assert!(run(filter.clone(), feat(Value::Number(1.0), Value::Null)));
     assert!(!run(filter, feat(Value::Null, Value::Null)));
 }
+
+// --- empty filter arrays ----------------------------------------------------
+
+/// `convertFilter([])` reads `filter[0]` (yielding `undefined`) before the
+/// `filter.length <= 1` check, and returns `undefined !== 'any'` — `true`.
+#[test]
+fn empty_filter_array_converts_to_true() {
+    assert_eq!(convert_legacy_filter(&json!([])).unwrap(), json!(true));
+}
+
+#[test]
+fn empty_filter_array_nested_in_a_combiner_converts() {
+    // `["all", legacy, []]` classifies as legacy, so `convert` descends into
+    // the empty array.
+    let filter = json!(["all", ["==", "a", 1], []]);
+    assert_eq!(
+        convert_legacy_filter(&filter).unwrap(),
+        json!(["all", ["==", ["get", "a"], 1], true])
+    );
+    parse_filter(&filter).expect("should parse");
+}
+
+#[test]
+fn empty_filter_array_parses_as_a_boolean_filter() {
+    // `[]` is not an expression filter, so it converts to `true`.
+    assert!(!is_expression_filter(&json!([])));
+    let expr = parse_filter(&json!([])).expect("empty filter should parse");
+    typecheck(&expr, Some(&Type::Boolean), false).expect("should typecheck as a boolean");
+}
+
+/// `[]` is truthy in JS, so `migrate` reaches `convertFilter` for a layer whose
+/// `filter` is an empty array.
+#[test]
+fn migrate_handles_an_empty_layer_filter() {
+    let style = json!({
+        "version": 8,
+        "layers": [{"id": "l", "type": "background", "filter": []}],
+    });
+    let migrated = maplibre_expr::migrate(&style).expect("migrate should succeed");
+    assert_eq!(migrated["layers"][0]["filter"], json!(true));
+}
+
+// --- legacy leaves under `!` and `case` -------------------------------------
+
+/// Upstream's `findMixedLegacyFilter` descends into `!` and `case` as well as
+/// `all`/`any`/`none`. This crate converts the legacy leaves it finds there
+/// instead of rejecting the filter, but descends exactly the same slots — so a
+/// leaf under `!` reads the property rather than comparing two literals.
+#[test]
+fn legacy_leaf_under_not_is_converted() {
+    assert_eq!(
+        convert_legacy_filter(&json!(["!", ["==", "a", 1]])).unwrap(),
+        json!(["!", ["==", ["get", "a"], 1]])
+    );
+
+    let mut props = BTreeMap::new();
+    props.insert("a".to_string(), Value::Number(1.0));
+    let feat = Feature {
+        properties: props,
+        ..Feature::default()
+    };
+    // Unconverted, the leaf compares the string "a" to 1 — always false — so
+    // `!` of it would be true whatever the feature holds.
+    assert!(!run(json!(["!", ["==", "a", 1]]), feat.clone()));
+    assert!(run(json!(["!", ["==", "a", 2]]), feat));
+}
+
+#[test]
+fn legacy_leaf_under_case_condition_is_converted() {
+    assert_eq!(
+        convert_legacy_filter(&json!(["case", ["==", "a", 1], true, false])).unwrap(),
+        json!(["case", ["==", ["get", "a"], 1], true, false])
+    );
+
+    let mut props = BTreeMap::new();
+    props.insert("a".to_string(), Value::Number(1.0));
+    let feat = Feature {
+        properties: props,
+        ..Feature::default()
+    };
+    assert!(run(
+        json!(["case", ["==", "a", 1], true, false]),
+        feat.clone()
+    ));
+    assert!(!run(json!(["case", ["==", "a", 2], true, false]), feat));
+}
+
+#[test]
+fn legacy_leaf_under_a_combiner_wrapped_not_is_converted() {
+    assert_eq!(
+        convert_legacy_filter(&json!(["all", ["!", ["==", "a", 1]]])).unwrap(),
+        json!(["!", ["==", ["get", "a"], 1]])
+    );
+}
+
+#[test]
+fn case_output_slots_are_not_descended() {
+    // Upstream checks conditions only (`i = 1; i < len - 1; i += 2`), so the
+    // output and fallback slots pass through untouched.
+    let filter = json!(["case", ["==", ["get", "a"], 1], ["==", "b", 2], false]);
+    assert_eq!(convert_legacy_filter(&filter).unwrap(), filter);
+}
+
+#[test]
+fn modern_not_and_case_still_pass_through_unchanged() {
+    for filter in [
+        json!(["!", ["==", ["get", "a"], 1]]),
+        json!(["!", ["has", "a"]]),
+        json!(["case", ["==", ["get", "a"], 1], true, false]),
+        json!(["case", ["in", "a", ["literal", [1, 2]]], true, false]),
+    ] {
+        assert_eq!(
+            convert_legacy_filter(&filter).unwrap(),
+            filter,
+            "modern filter should pass through unchanged"
+        );
+    }
+}
+
+// --- `in` value dedupe ------------------------------------------------------
+
+/// Upstream dedupes the `match` labels with JS `!==`, for which `1 === 1.0`.
+/// serde_json distinguishes `Number(1)` from `Number(1.0)`, which otherwise
+/// produces a `match` with a duplicated label.
+#[test]
+fn in_dedupes_integer_and_float_spellings_of_the_same_number() {
+    let filter: Json = serde_json::from_str(r#"["in","a",1,1.0,2]"#).unwrap();
+    let converted = convert_legacy_filter(&filter).unwrap();
+    let labels = converted[2].as_array().unwrap();
+    assert_eq!(labels.len(), 2, "duplicate label in {converted}");
+    assert_eq!(
+        labels
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![1.0, 2.0]
+    );
+}
+
+/// The sort *order* reproduces JS `Array.prototype.sort()` (lexicographic by
+/// string form), which the dedupe change must not disturb.
+#[test]
+fn in_sort_order_is_unchanged() {
+    assert_eq!(
+        convert_legacy_filter(&json!(["in", "a", 10, 9]))
+            .unwrap()
+            .get(2)
+            .unwrap(),
+        &json!([10, 9])
+    );
+    assert_eq!(
+        convert_legacy_filter(&json!(["in", "a", "b", "a", "b"]))
+            .unwrap()
+            .get(2)
+            .unwrap(),
+        &json!(["a", "b"])
+    );
+}
