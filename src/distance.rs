@@ -311,7 +311,12 @@ fn classify_rings(rings: &[Vec<P>]) -> Vec<Vec<Vec<P>>> {
 
 /// Compute `distance(feature, args)`; returns `NaN` when the geometry is
 /// unavailable (matching the reference).
-pub fn distance(feature_geom: &[Vec<P>], geom_type: &str, z: u32, args: &[SimpleGeom]) -> f64 {
+pub(crate) fn distance(
+    feature_geom: &[Vec<P>],
+    geom_type: &str,
+    z: u32,
+    args: &[SimpleGeom],
+) -> f64 {
     if feature_geom.is_empty() {
         return f64::NAN;
     }

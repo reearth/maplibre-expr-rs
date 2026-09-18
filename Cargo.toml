@@ -27,9 +27,11 @@ default = ["collator"]
 collator = ["dep:icu_collator", "dep:icu_locale_core"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+# `serde` itself is deliberately not a direct dependency: nothing here derives
+# or names it, and depending on it with `derive` would build serde_derive (and
+# syn / quote) on every build for nothing. `serde_json::Value` is the only
+# serde-side type this crate uses, and serde_json re-exports what it needs.
 serde_json = "1"
-thiserror = "2"
 # Pulled in directly rather than through the `icu` meta-crate, which would also
 # build the datetime, segmenter, calendar, list and plurals data crates.
 icu_collator = { version = "2", features = ["compiled_data"], optional = true }

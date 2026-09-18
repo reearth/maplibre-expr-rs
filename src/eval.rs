@@ -13,7 +13,7 @@ use crate::value::{FormatSection, Value};
 type Result<T> = std::result::Result<T, EvalError>;
 
 /// Evaluate an expression against a context (no user extensions).
-pub fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
+pub(crate) fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
     let funcs = HashMap::new();
     let externals = HashMap::new();
     let mut ev = Evaluator {
@@ -27,7 +27,7 @@ pub fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
 }
 
 /// Evaluate with expression functions and external functions from [`Options`].
-pub fn eval_with(expr: &Expr, ctx: &EvaluationContext, opts: &Options) -> Result<Value> {
+pub(crate) fn eval_with(expr: &Expr, ctx: &EvaluationContext, opts: &Options) -> Result<Value> {
     // Bodies are parsed once per `Options` and cached; see `Options::compiled_fns`.
     let funcs = opts
         .compiled_fns()
@@ -884,23 +884,122 @@ impl Evaluator<'_> {
         Err(type_error(&desc, &last))
     }
 
+    /// `to-number`, transcribing `Coercion.evaluate`'s `'number'` case
+    /// (`src/expression/definitions/coercion.ts:153-163`):
+    ///
+    /// ```js
+    /// let value = null;
+    /// for (const arg of this.args) {
+    ///     value = arg.evaluate(ctx);
+    ///     if (value === null) return 0;
+    ///     const num = Number(value);
+    ///     if (isNaN(num)) continue;
+    ///     return num;
+    /// }
+    /// throw new RuntimeError(`Could not convert ${JSON.stringify(value)} to number.`);
+    /// ```
+    ///
+    /// Two details are easy to lose. `null` short-circuits to `0` *without*
+    /// trying the remaining arguments, while every other non-numeric argument
+    /// falls through to the next one. And `isNaN(num) → continue` covers a NaN
+    /// that arrives as a number as much as one produced by the conversion, so
+    /// `["to-number", NaN]` throws rather than answering NaN — with
+    /// `JSON.stringify(NaN)` being `"null"`, hence
+    /// `Could not convert null to number.`
     fn op_to_number(&mut self, args: &[Expr]) -> Result<Value> {
+        /// `Number(string)` (ECMA-262 §7.1.4.1, `StringToNumber`). `None` is
+        /// JavaScript's `NaN`.
+        fn number_from_str(s: &str) -> Option<f64> {
+            // `StrWhiteSpace` is Unicode whitespace plus U+FEFF; an all-blank
+            // (or empty) string is `0`.
+            let t = s.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+            if t.is_empty() {
+                return Some(0.0);
+            }
+            match t {
+                "Infinity" | "+Infinity" => return Some(f64::INFINITY),
+                "-Infinity" => return Some(f64::NEG_INFINITY),
+                _ => {}
+            }
+            // `NonDecimalIntegerLiteral`: unsigned, and with at least one digit.
+            if let Some(radix) = match t.get(..2) {
+                Some("0x" | "0X") => Some(16u32),
+                Some("0o" | "0O") => Some(8),
+                Some("0b" | "0B") => Some(2),
+                _ => None,
+            } {
+                let digits = &t[2..];
+                if digits.is_empty() {
+                    return None;
+                }
+                // Accumulated in `f64` rather than an integer so that literals
+                // beyond `u128` round to the nearest double instead of
+                // overflowing, as JavaScript's `MV` does.
+                let mut acc = 0.0f64;
+                for c in digits.chars() {
+                    let d = c.to_digit(radix)?;
+                    acc = acc * f64::from(radix) + f64::from(d);
+                }
+                return Some(acc);
+            }
+            // `StrDecimalLiteral`. Rust's `f64::from_str` accepts exactly this
+            // grammar *plus* `inf`, `infinity` and `nan`, which JavaScript does
+            // not — rejecting every letter but the exponent's `e` rules those
+            // out (`Infinity` itself was handled above).
+            if t.chars()
+                .any(|c| c.is_ascii_alphabetic() && c != 'e' && c != 'E')
+            {
+                return None;
+            }
+            t.parse::<f64>().ok()
+        }
+
+        /// `Number(value)`, i.e. `ToNumber(ToPrimitive(value))`. `None` is NaN.
+        fn number_of(v: &Value) -> Option<f64> {
+            match v {
+                Value::Null => Some(0.0),
+                Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+                Value::Number(n) => Some(*n),
+                Value::String(s) => number_from_str(s),
+                // An array coerces through `Array.prototype.toString`, so
+                // `["to-number", ["literal", [7]]]` is `7` and `[]` is `0`.
+                // Any other element type stringifies to something non-numeric
+                // (`"[object Object]"`, `"rgba(…)"`), which is NaN either way.
+                Value::Array(items) => number_from_str(&array_to_string(items)?),
+                _ => None,
+            }
+        }
+
+        /// `Array.prototype.toString`: elements joined by `","`, with `null`
+        /// contributing the empty string. `None` where an element has no
+        /// numeric-looking stringification, which makes the whole join NaN.
+        fn array_to_string(items: &[Value]) -> Option<String> {
+            let mut out = String::new();
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                match item {
+                    Value::Null => {}
+                    Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+                    Value::Number(n) => out.push_str(&crate::value::format_number(*n)),
+                    Value::String(s) => out.push_str(s),
+                    Value::Array(nested) => out.push_str(&array_to_string(nested)?),
+                    _ => return None,
+                }
+            }
+            Some(out)
+        }
+
         let mut last = Value::Null;
         for a in args {
             last = self.eval(a)?;
-            match &last {
-                Value::Number(n) => return Ok(Value::Number(*n)),
-                Value::Null => return Ok(Value::Number(0.0)),
-                Value::Bool(b) => return Ok(Value::Number(if *b { 1.0 } else { 0.0 })),
-                Value::String(s) => {
-                    let trimmed = s.trim();
-                    if trimmed.is_empty() {
-                        return Ok(Value::Number(0.0));
-                    }
-                    if let Ok(n) = trimmed.parse::<f64>() {
-                        return Ok(Value::Number(n));
-                    }
-                }
+            if matches!(last, Value::Null) {
+                return Ok(Value::Number(0.0));
+            }
+            match number_of(&last) {
+                Some(n) if !n.is_nan() => return Ok(Value::Number(n)),
+                // `isNaN(num) → continue`.
                 _ => {}
             }
         }

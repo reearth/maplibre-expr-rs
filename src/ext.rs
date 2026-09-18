@@ -37,15 +37,15 @@ pub(crate) const MAX_CALL_DEPTH: usize = 64;
 
 /// An external function: a Rust closure called with the evaluated arguments
 /// and the context.
-pub type ExternalFn =
+pub(crate) type ExternalFn =
     Arc<dyn Fn(&[Value], &EvaluationContext) -> Result<Value, EvalError> + Send + Sync>;
 
 /// A parse-time macro: `body` is expanded with `params` bound to the call
 /// arguments (as a `let`). `body` is raw JSON in the expression grammar.
 #[derive(Debug, Clone)]
-pub struct Macro {
-    pub params: Vec<String>,
-    pub body: serde_json::Value,
+pub(crate) struct Macro {
+    pub(crate) params: Vec<String>,
+    pub(crate) body: serde_json::Value,
 }
 
 /// An expression function: `body` (raw JSON) is evaluated at call time with
@@ -56,9 +56,9 @@ pub struct Macro {
 /// [`evaluate_with`](crate::evaluate_with); registering anything else on the
 /// `Options` afterwards recompiles them on the next evaluation.
 #[derive(Debug, Clone)]
-pub struct ExprFn {
-    pub params: Vec<String>,
-    pub body: serde_json::Value,
+pub(crate) struct ExprFn {
+    pub(crate) params: Vec<String>,
+    pub(crate) body: serde_json::Value,
 }
 
 /// An [`ExprFn`] whose body has been parsed, ready for the evaluator.

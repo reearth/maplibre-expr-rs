@@ -23,7 +23,7 @@ const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 /// Type-check `expr` against an optional `expected` type. Returns the annotated
 /// expression (with coercion/assertion nodes inserted) on success, or a
 /// [`ParseError`] describing the first problem.
-pub fn typecheck(
+pub(crate) fn typecheck(
     expr: &Expr,
     expected: Option<&Type>,
     coerce_top_string: bool,

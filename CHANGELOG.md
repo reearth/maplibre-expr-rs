@@ -4,6 +4,153 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+A correctness pass that collated the crate against maplibre-style-spec at the
+pinned commit `ef522e45`. Most of it is invisible — the conformance suite
+already passed and still does (563/563) — but it changes a lot of error text,
+tightens `Color::parse`, and adds and removes `ParseErrorKind` variants, so
+read *Changed* before upgrading.
+
+### Added
+
+- `convert::try_convert_function` — the `Result`-returning sibling of
+  `convert_function`, with a new `convert::ConvertError` type, for callers that
+  want an unknown legacy function `type` reported rather than embedded in the
+  output.
+- The 17 `filter-*` operators (`filter-has`, `filter-has-id`, `filter-type-in`,
+  `filter-id-in`, `filter-in-small`, `filter-in-large`, and the `==`/`!=`-style
+  comparison forms) now parse. These are the internal forms
+  `convert_legacy_filter` emits, and upstream has them in its registry; this
+  crate accepted the output of its own converter only by accident before.
+- `ParseErrorKind::NestingTooDeep { max }`, reported when a JSON expression
+  nests deeper than 100 levels.
+- `FormatSection`, `FormatArg` and `SimpleGeom` are exported. They are the
+  payloads of the public variants `Value::Formatted`, `Expr::Format` and
+  `Expr::Distance`, so until now a downstream crate could pattern-match
+  through those variants but could not name their contents or build a
+  non-empty one.
+- `is_subtype` is exported alongside `Type`, whose canonical subtype predicate
+  it is, and `format_number` alongside `Value`, so callers can reproduce the
+  exact number rendering that `to-string`, `concat` and the error messages
+  use.
+
+### Changed
+
+- **Breaking:** `ParseErrorKind` gained and lost variants, and it is *not*
+  `#[non_exhaustive]`, so an exhaustive `match` on it will no longer compile.
+  Removed: `MatchAtLeast4`, `ExpectedOddArgsLet`, `FormatAtLeastOne`,
+  `CollatorOneArg`, `NumberFormatTwoArgs`, `ExpectedNArgs`, `StepStopNumber`,
+  `InterpolationStopNumber`, `InterpolationTypeName`, `LetBindingNameString`,
+  `VarBindingName`. Added: `NestingTooDeep`, `ExpectedTwoArguments`,
+  `ExpectedAtLeastOneArgument`, `ExpectedAtLeastArgs`, `LetAtLeast3`,
+  `ExpectedString`, `VarOneStringLiteral`, `StopInputLiteral`. Several
+  hand-written, single-operator variants were replaced by general ones, which
+  is why the count drops. `ExpectedEvenArgs` also lost its `op` field.
+- **Breaking:** `EvalErrorKind::ArrayIndexOutOfBounds`'s `max` field changes
+  from `usize` to `i64`. It is the last valid index, which is `-1` for an empty
+  array — the old type could not represent that and saturated at `0`, so an
+  out-of-range `at` on an empty array reported `0 > 0`.
+- **Breaking:** many error *messages* changed, to match upstream word for word.
+  The conformance fixtures only pin the wording they happen to reach; outside
+  that corpus the port had grown its own phrasing. `let`, `var`, `step`,
+  `interpolate`, `match`, `case`, `format`, `collator`, `number-format`, `at`
+  and every compound-expression signature error are affected, and some now
+  report at the key of the offending stop instead of `""`. Code that matches on
+  error strings will break; match on `ParseErrorKind` / `EvalErrorKind` instead.
+- **Breaking:** `Color::parse` is now a port of upstream's `parse_css_color.ts`
+  and follows CSS Color 4, so some inputs it used to accept are rejected —
+  notably mixed argument formats such as `rgb(50%, 0, 0)` (percentages mixed
+  with plain numbers) and `rgb(0, 0 255)` (commas mixed with spaces). Channels
+  and alpha that are merely out of range are clamped rather than rejected, so
+  `rgb(300, 0, 0)` is opaque red. In the other direction the named-color table
+  grows from 18 names to the full CSS list of 148, so many colors that used to
+  fail now parse.
+- **Breaking:** `config`, `measure-light`, `raster-value` and
+  `sky-radial-progress` are not in upstream's registry and are no longer
+  accepted.
+- **Breaking:** `convert_function` now returns `["error", msg]` for an unknown
+  function `type`. It previously fell through to exponential interpolation, so
+  a typo in a style silently changed the rendering instead of failing. Use
+  `try_convert_function` for a `Result`.
+- **Breaking:** `ExprFn`, `Macro` and `ExternalFn` are no longer exported. No
+  public function ever took or returned one — `Options::macro_def`,
+  `Options::expr_fn` and `Options::external` take their parts directly, and
+  `Options`'s fields are private — so the three were reachable only through
+  `Options`'s `Debug` output. Register extensions through `Options` as before.
+- **Breaking:** `to-number` now skips an argument that converts to `NaN` and
+  tries the next, as upstream does, instead of returning the `NaN`. String
+  conversion follows ECMA-262 `Number(string)` rather than Rust's
+  `str::parse`, so the Rust-only spellings `nan`, `inf` and `infinity` are no
+  longer accepted while `0x1f`, `0b101` and `0o17` now are. Arrays convert
+  through `Array.prototype.toString`, so `["to-number", ["literal", [7]]]`
+  yields `7` where it used to fail.
+- `format_number` and `Display for Value` now produce exactly JavaScript's
+  `String(n)` — a port of ECMA-262 6.1.6.1.20. This changes the output for
+  `-0`, for values near the exponent-notation thresholds, and for infinities.
+- `interpolate` validates its interpolation type before its argument count, as
+  upstream does, so a call that is wrong in both ways now reports the type.
+- `serde` and `thiserror` are no longer dependencies. Nothing referenced
+  either — the error types are hand-written `Display` + `std::error::Error`
+  impls, and no type here derives `Serialize` or `Deserialize` — but the
+  `serde` dependency's `derive` feature pulled `serde_derive`, `syn` and
+  `quote` into every build. `serde_json` is unaffected and remains the crate's
+  only non-optional dependency, which is what the README has claimed all
+  along. The dependency graph drops from 42 crates to 38 with `collator`, and
+  from 14 to 6 without it. No API change.
+- `tests/refresh_fixtures.sh` and `scripts/refresh_reference.sh` now rewrite
+  the pinned commit in the matching `ATTRIBUTION.md` themselves, instead of
+  printing a reminder for someone to do it by hand. This crate's correctness
+  is defined as agreeing with upstream *at the pinned commit*, so a pin that
+  drifts away from the vendored snapshot undermines every later comparison.
+
+### Fixed
+
+- Three panics on ordinary input:
+  - An empty legacy filter array (`"filter": []`) panicked in
+    `convert_legacy_filter`, reachable from `migrate` on any style that has
+    one. It now converts to `true`, as upstream does.
+  - An empty `LineString` or polygon ring panicked in `distance`. It now
+    yields a non-finite result instead, matching upstream.
+  - A multi-byte character in a hex color (`#aaaaa✗`) panicked in
+    `Color::parse` by slicing on a non-char boundary. It is now rejected.
+- `Options` is documented as shareable across threads, but the macro-expansion
+  depth counter lived in the shared registry as a non-atomic
+  read-modify-write, so two threads parsing through one `&Options` corrupted
+  each other's budget. A non-recursive one-level macro failed roughly 1 parse
+  in 6, and a genuinely recursive one overran the 64-level guard into a stack
+  overflow. Per-parse state is now threaded through the recursion.
+- Deeply nested JSON aborted the process with a stack overflow instead of
+  returning an error; `parse` now has a nesting limit of 100 and returns
+  `Err(NestingTooDeep)`.
+- `Feature::geometry`'s documentation said "global tile coordinates". It is
+  lng/lat degrees — both `within` and `distance` project it themselves — and
+  feeding it tile coordinates returns `false` or `inf` rather than erroring, so
+  the wrong doc produced silently wrong results. The doc also mentioned only
+  `within`.
+- `["coalesce", ["get", "c"], "red"]` was rejected on a color property. The
+  assert/coerce table existed in two copies that had drifted, and one of them
+  tolerated a type mismatch only when the actual type was `value`; this idiom
+  is accepted upstream.
+- `to-string` printed every integer in `[2^63, 1e21)` as
+  `9223372036854775807`, because the conversion went through `i64`.
+- `to-string` escaped strings with Rust's `Debug`, emitting Rust-syntax escapes
+  where JSON requires its own.
+- `to-color` and the implicit color coercion never range-checked their
+  channels, although `rgb` a few hundred lines away did.
+- `index-of` measured its `from` argument in code points; upstream indexes in
+  UTF-16.
+- An ordered comparison with a `collator` returned a value where upstream
+  throws, and array operands were rendered with their item type and length
+  where upstream prints the bare kind.
+- A legacy filter leaf under `!` or `case` was neither converted nor rejected,
+  so the filter compared the property *name* against the value.
+- `convert_literal` missed `typeof null === 'object'`; `convert_token_string`
+  now matches upstream's `/{([^{}]+)}/g`; `in` deduplicates numbers by value,
+  so `1` and `1.0` no longer produce duplicate `match` labels; `resolvedImage`
+  properties regained upstream's empty-string fallback; and `distance` seeds
+  its running minimum as upstream does, so a one-point line is finite.
+
 ## [0.4.0]
 
 ### Added

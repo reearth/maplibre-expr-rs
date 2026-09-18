@@ -88,7 +88,7 @@ impl<'a> Ctx<'a> {
 }
 
 /// Parse a MapLibre expression from JSON.
-pub fn parse(json: &Json, opts: &Options) -> Result<Expr> {
+pub(crate) fn parse(json: &Json, opts: &Options) -> Result<Expr> {
     parse_expr(json, &Ctx::new(opts))
 }
 
