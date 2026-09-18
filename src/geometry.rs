@@ -3,14 +3,14 @@
 //! `util/geometry_util.ts` and `definitions/within.ts`.
 
 /// Tile extent (coordinate units per tile edge).
-pub const EXTENT: f64 = 8192.0;
+pub(crate) const EXTENT: f64 = 8192.0;
 
 type P = (f64, f64);
 /// An axis-aligned bounding box `[minx, miny, maxx, maxy]`.
 type BBox = [f64; 4];
 
 /// Project a `[lng, lat]` coordinate to global tile coordinates at zoom `z`.
-pub fn tile_coord(lng: f64, lat: f64, z: u32) -> P {
+pub(crate) fn tile_coord(lng: f64, lat: f64, z: u32) -> P {
     let mx = (180.0 + lng) / 360.0;
     let my = (180.0
         - (180.0 / std::f64::consts::PI)
@@ -23,7 +23,7 @@ pub fn tile_coord(lng: f64, lat: f64, z: u32) -> P {
 }
 
 /// Inverse of [`tile_coord`]: global tile coordinates back to `[lng, lat]`.
-pub fn lnglat_from_tile(gx: f64, gy: f64, z: u32) -> P {
+pub(crate) fn lnglat_from_tile(gx: f64, gy: f64, z: u32) -> P {
     use std::f64::consts::PI;
     let tiles = 2f64.powi(z as i32);
     let mx = gx / EXTENT / tiles;
@@ -35,7 +35,7 @@ pub fn lnglat_from_tile(gx: f64, gy: f64, z: u32) -> P {
 
 /// Round-trip a `[lng, lat]` through global tile coordinates at zoom `z`,
 /// quantizing to tile resolution as MapLibre does before computing distances.
-pub fn tile_round_trip(lng: f64, lat: f64, z: u32) -> P {
+pub(crate) fn tile_round_trip(lng: f64, lat: f64, z: u32) -> P {
     let (gx, gy) = tile_coord(lng, lat, z);
     lnglat_from_tile(gx, gy, z)
 }
@@ -83,7 +83,7 @@ fn two_sided(p1: P, p2: P, q1: P, q2: P) -> bool {
     (det1 > 0.0 && det2 < 0.0) || (det1 < 0.0 && det2 > 0.0)
 }
 
-pub fn segment_intersect(a: P, b: P, c: P, d: P) -> bool {
+pub(crate) fn segment_intersect(a: P, b: P, c: P, d: P) -> bool {
     let vp = (b.0 - a.0, b.1 - a.1);
     let vq = (d.0 - c.0, d.1 - c.1);
     if perp(vq, vp) == 0.0 {
@@ -99,7 +99,7 @@ fn line_intersect_polygon(p1: P, p2: P, polygon: &[Vec<P>]) -> bool {
     })
 }
 
-pub fn point_within_polygon(point: P, rings: &[Vec<P>], true_if_boundary: bool) -> bool {
+pub(crate) fn point_within_polygon(point: P, rings: &[Vec<P>], true_if_boundary: bool) -> bool {
     let mut inside = false;
     for ring in rings {
         for w in ring.windows(2) {
@@ -161,7 +161,7 @@ fn update_point(p: &mut P, bbox: &mut BBox, poly_bbox: &BBox, world_size: f64) {
 }
 
 /// A polygon (list of rings) in `[lng, lat]` coordinates.
-pub type Polygon = Vec<Vec<P>>;
+pub(crate) type Polygon = Vec<Vec<P>>;
 
 fn tile_polygon(coords: &Polygon, bbox: &mut BBox, z: u32) -> Vec<Vec<P>> {
     coords
@@ -180,7 +180,7 @@ fn tile_polygon(coords: &Polygon, bbox: &mut BBox, z: u32) -> Vec<Vec<P>> {
 
 /// Whether the feature geometry (raw `[lng, lat]` coordinates grouped into
 /// rings/lines) lies within the argument polygons (also `[lng, lat]`).
-pub fn within(
+pub(crate) fn within(
     feature_geom: &[Vec<P>],
     geom_type: &str,
     canonical: (u32, u32, u32),

@@ -51,18 +51,19 @@ mod typ;
 mod typecheck;
 mod value;
 
-pub use ast::{Expr, InterpKind, InterpSpace};
+pub use ast::{Expr, FormatArg, InterpKind, InterpSpace};
 pub use color::Color;
 pub use context::{EvaluationContext, Feature};
+pub use distance::SimpleGeom;
 pub use error::{EvalError, EvalErrorKind, ParseError, ParseErrorKind};
-pub use ext::{ExprFn, ExternalFn, Macro, Options};
+pub use ext::Options;
 pub use filter::{
     convert_legacy_filter, is_expression_filter, parse_filter, parse_filter_with, FilterError,
     ParseFilterError,
 };
 pub use migrate::{migrate, MigrateError};
-pub use typ::Type;
-pub use value::{Projection, Value};
+pub use typ::{is_subtype, Type};
+pub use value::{format_number, FormatSection, Projection, Value};
 
 /// Parse a MapLibre expression from its JSON representation — the counterpart
 /// of MapLibre's `createExpression`. Like it, this accepts only expressions:

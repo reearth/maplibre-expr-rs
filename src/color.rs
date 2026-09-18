@@ -1,4 +1,4 @@
-//! A minimal CSS color model and parser, sufficient for style expressions.
+//! A CSS Color 4 color model and parser, sufficient for style expressions.
 
 use std::fmt;
 
@@ -62,17 +62,41 @@ impl Color {
         Color::new(r, g, b, a)
     }
 
-    /// Parse a CSS color string. Supports `#rgb`/`#rrggbb`/`#rrggbbaa`,
-    /// `rgb()`/`rgba()`, `hsl()`/`hsla()`, and a table of named colors.
+    /// Parse a CSS color string, following the CSS Color 4 subset that
+    /// maplibre-style-spec's `parse_css_color.ts` implements: the `transparent`
+    /// keyword, all 148 CSS named colors, every hex notation (`#rgb`, `#rgba`,
+    /// `#rrggbb`, `#rrggbbaa`), and the `rgb()`/`rgba()`/`hsl()`/`hsla()`
+    /// functions in both the comma-separated legacy syntax and the
+    /// space-separated modern syntax with an optional `/`-separated alpha.
+    ///
+    /// Parsing is case-insensitive and ignores surrounding whitespace.
+    /// Channels and alpha are clamped to their valid ranges rather than
+    /// rejected; mixing commas with spaces, or percentages with plain numbers,
+    /// is rejected. Angles only accept an optional `deg` suffix, and the `none`
+    /// keyword is not supported.
     pub fn parse(input: &str) -> Option<Color> {
-        let s = input.trim();
+        let lowered = input.to_lowercase();
+        let s = lowered.trim();
+
+        if s == "transparent" {
+            return Some(Color::new(0.0, 0.0, 0.0, 0.0));
+        }
+
+        if let Some((r, g, b)) = named(s) {
+            return Some(Color::from_rgba8(r as f64, g as f64, b as f64, 1.0));
+        }
+
         if let Some(hex) = s.strip_prefix('#') {
             return parse_hex(hex);
         }
-        if let Some(c) = parse_functional(s) {
-            return Some(c);
+
+        if s.starts_with("rgb") {
+            // A `rgb`-prefixed string can never match the hsl grammar, so a
+            // failure here is a failure outright.
+            return parse_rgb(s);
         }
-        named(s)
+
+        parse_hsl(s)
     }
 }
 
@@ -89,145 +113,275 @@ impl fmt::Display for Color {
     }
 }
 
+// ---- CSS color parsing -----------------------------------------------
+//
+// A port of maplibre-style-spec's `parse_css_color.ts`. The upstream grammar is
+// expressed as two regular expressions; this is a hand-rolled equivalent, with
+// the same accept/reject decisions and the same clamping.
+
+/// `/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/` plus upstream's
+/// `parseInt(hex.padEnd(2, hex), 16) / 255` expansion.
 fn parse_hex(hex: &str) -> Option<Color> {
     let bytes = hex.as_bytes();
+    if !bytes.iter().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    // `hex` is all-ASCII from here on, so byte indices are char boundaries.
     let expand = |c: u8| {
-        let v = (c as char).to_digit(16)? as f64;
-        Some(v * 16.0 + v)
+        let v = (c as char).to_digit(16).unwrap() as f64;
+        v * 16.0 + v
     };
-    match hex.len() {
+    let pair = |s: &str| u8::from_str_radix(s, 16).unwrap() as f64;
+    match bytes.len() {
         3 => Some(Color::from_rgba8(
-            expand(bytes[0])?,
-            expand(bytes[1])?,
-            expand(bytes[2])?,
+            expand(bytes[0]),
+            expand(bytes[1]),
+            expand(bytes[2]),
             1.0,
         )),
         4 => Some(Color::from_rgba8(
-            expand(bytes[0])?,
-            expand(bytes[1])?,
-            expand(bytes[2])?,
-            expand(bytes[3])? / 255.0,
+            expand(bytes[0]),
+            expand(bytes[1]),
+            expand(bytes[2]),
+            expand(bytes[3]) / 255.0,
         )),
         6 => Some(Color::from_rgba8(
-            hexpair(&hex[0..2])?,
-            hexpair(&hex[2..4])?,
-            hexpair(&hex[4..6])?,
+            pair(&hex[0..2]),
+            pair(&hex[2..4]),
+            pair(&hex[4..6]),
             1.0,
         )),
         8 => Some(Color::from_rgba8(
-            hexpair(&hex[0..2])?,
-            hexpair(&hex[2..4])?,
-            hexpair(&hex[4..6])?,
-            hexpair(&hex[6..8])? / 255.0,
+            pair(&hex[0..2]),
+            pair(&hex[2..4]),
+            pair(&hex[4..6]),
+            pair(&hex[6..8]) / 255.0,
         )),
         _ => None,
     }
 }
 
-fn hexpair(s: &str) -> Option<f64> {
-    u8::from_str_radix(s, 16).ok().map(|v| v as f64)
+/// A cursor over the (already lowercased and trimmed) input.
+struct Scanner<'a> {
+    s: &'a str,
+    i: usize,
 }
 
-fn parse_functional(s: &str) -> Option<Color> {
-    let open = s.find('(')?;
-    let name = s[..open].trim().to_ascii_lowercase();
-    let inner = s[open + 1..].strip_suffix(')')?;
-
-    // Accept both legacy comma syntax (`rgb(0, 0, 255)`) and CSS Color 4
-    // whitespace syntax with a `/`-separated alpha (`rgb(0 0 255 / 0.5)`).
-    let (body, alpha_tok) = match inner.split_once('/') {
-        Some((body, alpha)) => (body, Some(alpha.trim())),
-        None => (inner, None),
-    };
-    let parts: Vec<&str> = body
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|t| !t.is_empty())
-        .collect();
-    if parts.len() < 3 {
-        return None;
+impl<'a> Scanner<'a> {
+    fn new(s: &'a str) -> Scanner<'a> {
+        Scanner { s, i: 0 }
     }
-    let alpha_tok = alpha_tok.or_else(|| parts.get(3).copied());
-    let a = match alpha_tok {
-        Some(t) => alpha(t)?,
-        None => 1.0,
-    };
 
-    match name.as_str() {
-        "rgb" | "rgba" => Some(Color::from_rgba8(
-            channel(parts[0])?,
-            channel(parts[1])?,
-            channel(parts[2])?,
-            a,
-        )),
-        "hsl" | "hsla" => {
-            let h = parts[0].trim_end_matches("deg").parse::<f64>().ok()?;
-            let (r, g, b) = hsl_to_rgb(h, percent(parts[1])?, percent(parts[2])?);
-            Some(Color::new(r, g, b, a))
+    fn peek(&self) -> Option<char> {
+        self.s[self.i..].chars().next()
+    }
+
+    fn eat(&mut self, c: char) -> bool {
+        if self.peek() == Some(c) {
+            self.i += c.len_utf8();
+            true
+        } else {
+            false
         }
-        _ => None,
+    }
+
+    fn eat_str(&mut self, prefix: &str) -> bool {
+        if self.s[self.i..].starts_with(prefix) {
+            self.i += prefix.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `\s*`; reports whether anything was consumed.
+    fn skip_ws(&mut self) -> bool {
+        let start = self.i;
+        while let Some(c) = self.peek() {
+            if c.is_whitespace() {
+                self.i += c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        self.i > start
+    }
+
+    /// `([\de.+-]+)`, converted the way JavaScript's unary `+` would: a token
+    /// the character class admits but that is not a number becomes `NaN`, which
+    /// upstream's `validateNumbers` then rejects. The class excludes the
+    /// letters of `inf`/`nan`, so those never reach the conversion.
+    fn number(&mut self) -> Option<f64> {
+        let start = self.i;
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() || matches!(c, 'e' | '.' | '+' | '-') {
+                self.i += c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if self.i == start {
+            return None;
+        }
+        Some(self.s[start..self.i].parse::<f64>().unwrap_or(f64::NAN))
+    }
+
+    /// `(?:\s+|\s*(,)\s*)`: either whitespace or a comma, reported as `' '` or
+    /// `','` so the caller can check that the separators are consistent.
+    fn separator(&mut self) -> Option<char> {
+        let ws = self.skip_ws();
+        if self.eat(',') {
+            self.skip_ws();
+            Some(',')
+        } else if ws {
+            Some(' ')
+        } else {
+            None
+        }
+    }
+
+    /// `(?:\s*([,\/])\s*([\de.+-]+)(%)?)?\s*\)$`: the optional alpha argument
+    /// followed by the closing paren and end of input. Returns the separator
+    /// that introduced the alpha (or `None`) and the clamped alpha value.
+    fn alpha_tail(&mut self) -> Option<(Option<char>, Option<f64>)> {
+        self.skip_ws();
+        let mut sep = None;
+        let mut alpha = None;
+        if matches!(self.peek(), Some(',') | Some('/')) {
+            sep = self.peek();
+            self.i += 1;
+            self.skip_ws();
+            let a = self.number()?;
+            let as_percentage = self.eat('%');
+            alpha = Some(clamp(if as_percentage { a / 100.0 } else { a }, 0.0, 1.0));
+            self.skip_ws();
+        }
+        if !self.eat(')') || self.i != self.s.len() {
+            return None;
+        }
+        Some((sep, alpha))
     }
 }
 
-/// Parse an alpha token: a plain `0.0..=1.0` number or a percentage.
-fn alpha(s: &str) -> Option<f64> {
-    if let Some(p) = s.strip_suffix('%') {
-        Some(p.trim().parse::<f64>().ok()? / 100.0)
-    } else {
-        s.parse::<f64>().ok()
-    }
-}
-
-fn channel(s: &str) -> Option<f64> {
-    if let Some(p) = s.strip_suffix('%') {
-        Some(p.trim().parse::<f64>().ok()? / 100.0 * 255.0)
-    } else {
-        s.parse::<f64>().ok()
-    }
-}
-
-fn percent(s: &str) -> Option<f64> {
-    s.strip_suffix('%')?
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .map(|v| v / 100.0)
-}
-
-fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
-    let h = ((h % 360.0) + 360.0) % 360.0 / 360.0;
-    if s == 0.0 {
-        return (l, l, l);
-    }
-    let q = if l < 0.5 {
-        l * (1.0 + s)
-    } else {
-        l + s - l * s
-    };
-    let p = 2.0 * l - q;
-    (
-        hue_to_rgb(p, q, h + 1.0 / 3.0),
-        hue_to_rgb(p, q, h),
-        hue_to_rgb(p, q, h - 1.0 / 3.0),
+/// Upstream's `argFormat` check: `[f1 || ' ', f2 || ' ', f3].join('')` must be
+/// one of `'  '`, `'  /'`, `',,'` or `',,,'` — commas and spaces never mix.
+fn arg_format_ok(f1: char, f2: char, f3: Option<char>) -> bool {
+    matches!(
+        (f1, f2, f3),
+        (' ', ' ', None) | (' ', ' ', Some('/')) | (',', ',', None) | (',', ',', Some(','))
     )
 }
 
-fn hue_to_rgb(p: f64, q: f64, t: f64) -> f64 {
-    let t = if t < 0.0 {
-        t + 1.0
-    } else if t > 1.0 {
-        t - 1.0
+fn clamp(n: f64, min: f64, max: f64) -> f64 {
+    // `Math.min(Math.max(min, n), max)`. JavaScript's `Math.min`/`Math.max`
+    // propagate NaN while Rust's `f64::min`/`f64::max` discard it, so NaN is
+    // kept explicitly here; `validateNumbers` upstream relies on it surviving.
+    if n.is_nan() {
+        f64::NAN
     } else {
-        t
-    };
-    if t < 1.0 / 6.0 {
-        p + (q - p) * 6.0 * t
-    } else if t < 1.0 / 2.0 {
-        q
-    } else if t < 2.0 / 3.0 {
-        p + (q - p) * (2.0 / 3.0 - t) * 6.0
-    } else {
-        p
+        n.clamp(min, max)
     }
+}
+
+/// `/^rgba?\(\s*([\de.+-]+)(%)?(?:\s+|\s*(,)\s*)([\de.+-]+)(%)?(?:\s+|\s*(,)\s*)([\de.+-]+)(%)?(?:\s*([,\/])\s*([\de.+-]+)(%)?)?\s*\)$/`
+fn parse_rgb(s: &str) -> Option<Color> {
+    let mut sc = Scanner::new(s);
+    if !sc.eat_str("rgb") {
+        return None;
+    }
+    sc.eat('a');
+    if !sc.eat('(') {
+        return None;
+    }
+    sc.skip_ws();
+
+    let r = sc.number()?;
+    let rp = sc.eat('%');
+    let f1 = sc.separator()?;
+    let g = sc.number()?;
+    let gp = sc.eat('%');
+    let f2 = sc.separator()?;
+    let b = sc.number()?;
+    let bp = sc.eat('%');
+    let (f3, alpha) = sc.alpha_tail()?;
+
+    if !arg_format_ok(f1, f2, f3) {
+        return None;
+    }
+    // `valFormat`: all three percentages or none; a mix is rejected.
+    let max_value = match (rp, gp, bp) {
+        (true, true, true) => 100.0,
+        (false, false, false) => 255.0,
+        _ => return None,
+    };
+    let rgba = [
+        clamp(r / max_value, 0.0, 1.0),
+        clamp(g / max_value, 0.0, 1.0),
+        clamp(b / max_value, 0.0, 1.0),
+        alpha.unwrap_or(1.0),
+    ];
+    if rgba.iter().any(|v| v.is_nan()) {
+        return None;
+    }
+    Some(Color::new(rgba[0], rgba[1], rgba[2], rgba[3]))
+}
+
+/// `/^hsla?\(\s*([\de.+-]+)(?:deg)?(?:\s+|\s*(,)\s*)([\de.+-]+)%(?:\s+|\s*(,)\s*)([\de.+-]+)%(?:\s*([,\/])\s*([\de.+-]+)(%)?)?\s*\)$/`
+fn parse_hsl(s: &str) -> Option<Color> {
+    let mut sc = Scanner::new(s);
+    if !sc.eat_str("hsl") {
+        return None;
+    }
+    sc.eat('a');
+    if !sc.eat('(') {
+        return None;
+    }
+    sc.skip_ws();
+
+    let h = sc.number()?;
+    sc.eat_str("deg");
+    let f1 = sc.separator()?;
+    let s_val = sc.number()?;
+    if !sc.eat('%') {
+        return None;
+    }
+    let f2 = sc.separator()?;
+    let l_val = sc.number()?;
+    if !sc.eat('%') {
+        return None;
+    }
+    let (f3, alpha) = sc.alpha_tail()?;
+
+    if !arg_format_ok(f1, f2, f3) {
+        return None;
+    }
+    let hsla = [
+        h,
+        clamp(s_val, 0.0, 100.0),
+        clamp(l_val, 0.0, 100.0),
+        alpha.unwrap_or(1.0),
+    ];
+    if hsla.iter().any(|v| v.is_nan()) {
+        return None;
+    }
+    let [r, g, b, a] = hsl_to_rgb(hsla);
+    Some(Color::new(r, g, b, a))
+}
+
+/// <https://drafts.csswg.org/css-color-4/#hsl-to-rgb>, as in `color_spaces.ts`.
+/// Hue is in degrees, saturation and lightness in `0..=100`.
+fn hsl_to_rgb([h, s, l, alpha]: [f64; 4]) -> [f64; 4] {
+    let h = constrain_angle(h);
+    let s = s / 100.0;
+    let l = l / 100.0;
+    let f = |n: f64| {
+        let k = (n + h / 30.0) % 12.0;
+        let a = s * l.min(1.0 - l);
+        // `Math.max(-1, Math.min(k - 3, 9 - k, 1))`; `k` is finite here because
+        // a NaN hue is rejected before this point.
+        l - a * (k - 3.0).min(9.0 - k).clamp(-1.0, 1.0)
+    };
+    [f(0.0), f(8.0), f(4.0), alpha]
 }
 
 // ---- CIE L*a*b* / HCL conversions ------------------------------------
@@ -339,33 +493,364 @@ fn hcl_to_rgb([h, c, l, alpha]: [f64; 4]) -> [f64; 4] {
     lab_to_rgb([l, h.cos() * c, h.sin() * c, alpha])
 }
 
-/// A small subset of the CSS named colors that appear in the test fixtures.
-fn named(s: &str) -> Option<Color> {
-    let rgb = match s.to_ascii_lowercase().as_str() {
-        "transparent" => return Some(Color::new(0.0, 0.0, 0.0, 0.0)),
+/// The CSS Color 4 named colors, copied verbatim from the `namedColors` table
+/// in maplibre-style-spec's `parse_css_color.ts`. `transparent` is handled by
+/// the caller, as it is upstream.
+fn named(s: &str) -> Option<(u8, u8, u8)> {
+    let rgb = match s {
+        "aliceblue" => (240, 248, 255),
+        "antiquewhite" => (250, 235, 215),
+        "aqua" => (0, 255, 255),
+        "aquamarine" => (127, 255, 212),
+        "azure" => (240, 255, 255),
+        "beige" => (245, 245, 220),
+        "bisque" => (255, 228, 196),
         "black" => (0, 0, 0),
-        "white" => (255, 255, 255),
-        "red" => (255, 0, 0),
-        "green" => (0, 128, 0),
-        "lime" => (0, 255, 0),
+        "blanchedalmond" => (255, 235, 205),
         "blue" => (0, 0, 255),
-        "yellow" => (255, 255, 0),
-        "cyan" | "aqua" => (0, 255, 255),
-        "magenta" | "fuchsia" => (255, 0, 255),
-        "gray" | "grey" => (128, 128, 128),
-        "silver" => (192, 192, 192),
+        "blueviolet" => (138, 43, 226),
+        "brown" => (165, 42, 42),
+        "burlywood" => (222, 184, 135),
+        "cadetblue" => (95, 158, 160),
+        "chartreuse" => (127, 255, 0),
+        "chocolate" => (210, 105, 30),
+        "coral" => (255, 127, 80),
+        "cornflowerblue" => (100, 149, 237),
+        "cornsilk" => (255, 248, 220),
+        "crimson" => (220, 20, 60),
+        "cyan" => (0, 255, 255),
+        "darkblue" => (0, 0, 139),
+        "darkcyan" => (0, 139, 139),
+        "darkgoldenrod" => (184, 134, 11),
+        "darkgray" => (169, 169, 169),
+        "darkgreen" => (0, 100, 0),
+        "darkgrey" => (169, 169, 169),
+        "darkkhaki" => (189, 183, 107),
+        "darkmagenta" => (139, 0, 139),
+        "darkolivegreen" => (85, 107, 47),
+        "darkorange" => (255, 140, 0),
+        "darkorchid" => (153, 50, 204),
+        "darkred" => (139, 0, 0),
+        "darksalmon" => (233, 150, 122),
+        "darkseagreen" => (143, 188, 143),
+        "darkslateblue" => (72, 61, 139),
+        "darkslategray" => (47, 79, 79),
+        "darkslategrey" => (47, 79, 79),
+        "darkturquoise" => (0, 206, 209),
+        "darkviolet" => (148, 0, 211),
+        "deeppink" => (255, 20, 147),
+        "deepskyblue" => (0, 191, 255),
+        "dimgray" => (105, 105, 105),
+        "dimgrey" => (105, 105, 105),
+        "dodgerblue" => (30, 144, 255),
+        "firebrick" => (178, 34, 34),
+        "floralwhite" => (255, 250, 240),
+        "forestgreen" => (34, 139, 34),
+        "fuchsia" => (255, 0, 255),
+        "gainsboro" => (220, 220, 220),
+        "ghostwhite" => (248, 248, 255),
+        "gold" => (255, 215, 0),
+        "goldenrod" => (218, 165, 32),
+        "gray" => (128, 128, 128),
+        "green" => (0, 128, 0),
+        "greenyellow" => (173, 255, 47),
+        "grey" => (128, 128, 128),
+        "honeydew" => (240, 255, 240),
+        "hotpink" => (255, 105, 180),
+        "indianred" => (205, 92, 92),
+        "indigo" => (75, 0, 130),
+        "ivory" => (255, 255, 240),
+        "khaki" => (240, 230, 140),
+        "lavender" => (230, 230, 250),
+        "lavenderblush" => (255, 240, 245),
+        "lawngreen" => (124, 252, 0),
+        "lemonchiffon" => (255, 250, 205),
+        "lightblue" => (173, 216, 230),
+        "lightcoral" => (240, 128, 128),
+        "lightcyan" => (224, 255, 255),
+        "lightgoldenrodyellow" => (250, 250, 210),
+        "lightgray" => (211, 211, 211),
+        "lightgreen" => (144, 238, 144),
+        "lightgrey" => (211, 211, 211),
+        "lightpink" => (255, 182, 193),
+        "lightsalmon" => (255, 160, 122),
+        "lightseagreen" => (32, 178, 170),
+        "lightskyblue" => (135, 206, 250),
+        "lightslategray" => (119, 136, 153),
+        "lightslategrey" => (119, 136, 153),
+        "lightsteelblue" => (176, 196, 222),
+        "lightyellow" => (255, 255, 224),
+        "lime" => (0, 255, 0),
+        "limegreen" => (50, 205, 50),
+        "linen" => (250, 240, 230),
+        "magenta" => (255, 0, 255),
         "maroon" => (128, 0, 0),
-        "olive" => (128, 128, 0),
+        "mediumaquamarine" => (102, 205, 170),
+        "mediumblue" => (0, 0, 205),
+        "mediumorchid" => (186, 85, 211),
+        "mediumpurple" => (147, 112, 219),
+        "mediumseagreen" => (60, 179, 113),
+        "mediumslateblue" => (123, 104, 238),
+        "mediumspringgreen" => (0, 250, 154),
+        "mediumturquoise" => (72, 209, 204),
+        "mediumvioletred" => (199, 21, 133),
+        "midnightblue" => (25, 25, 112),
+        "mintcream" => (245, 255, 250),
+        "mistyrose" => (255, 228, 225),
+        "moccasin" => (255, 228, 181),
+        "navajowhite" => (255, 222, 173),
         "navy" => (0, 0, 128),
-        "purple" => (128, 0, 128),
-        "teal" => (0, 128, 128),
+        "oldlace" => (253, 245, 230),
+        "olive" => (128, 128, 0),
+        "olivedrab" => (107, 142, 35),
         "orange" => (255, 165, 0),
+        "orangered" => (255, 69, 0),
+        "orchid" => (218, 112, 214),
+        "palegoldenrod" => (238, 232, 170),
+        "palegreen" => (152, 251, 152),
+        "paleturquoise" => (175, 238, 238),
+        "palevioletred" => (219, 112, 147),
+        "papayawhip" => (255, 239, 213),
+        "peachpuff" => (255, 218, 185),
+        "peru" => (205, 133, 63),
+        "pink" => (255, 192, 203),
+        "plum" => (221, 160, 221),
+        "powderblue" => (176, 224, 230),
+        "purple" => (128, 0, 128),
+        "rebeccapurple" => (102, 51, 153),
+        "red" => (255, 0, 0),
+        "rosybrown" => (188, 143, 143),
+        "royalblue" => (65, 105, 225),
+        "saddlebrown" => (139, 69, 19),
+        "salmon" => (250, 128, 114),
+        "sandybrown" => (244, 164, 96),
+        "seagreen" => (46, 139, 87),
+        "seashell" => (255, 245, 238),
+        "sienna" => (160, 82, 45),
+        "silver" => (192, 192, 192),
+        "skyblue" => (135, 206, 235),
+        "slateblue" => (106, 90, 205),
+        "slategray" => (112, 128, 144),
+        "slategrey" => (112, 128, 144),
+        "snow" => (255, 250, 250),
+        "springgreen" => (0, 255, 127),
+        "steelblue" => (70, 130, 180),
+        "tan" => (210, 180, 140),
+        "teal" => (0, 128, 128),
+        "thistle" => (216, 191, 216),
+        "tomato" => (255, 99, 71),
+        "turquoise" => (64, 224, 208),
+        "violet" => (238, 130, 238),
+        "wheat" => (245, 222, 179),
+        "white" => (255, 255, 255),
+        "whitesmoke" => (245, 245, 245),
+        "yellow" => (255, 255, 0),
+        "yellowgreen" => (154, 205, 50),
         _ => return None,
     };
-    Some(Color::from_rgba8(
-        rgb.0 as f64,
-        rgb.1 as f64,
-        rgb.2 as f64,
-        1.0,
-    ))
+    Some(rgb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Color;
+
+    fn rgba(s: &str) -> Option<[f64; 4]> {
+        Color::parse(s).map(|c| [c.r, c.g, c.b, c.a])
+    }
+
+    fn close(a: [f64; 4], b: [f64; 4]) -> bool {
+        a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-12)
+    }
+
+    #[test]
+    fn multibyte_input_does_not_panic() {
+        // `hex.len()` is a byte length; slicing it at 2/4/6 used to split a
+        // multi-byte char. Upstream's hex regexp simply rejects these.
+        for s in [
+            "#€abc",
+            "#€abcde",
+            "#€",
+            "#ab€",
+            "#abcde€",
+            "#日本語",
+            "rgb(日)",
+            "€",
+        ] {
+            assert_eq!(Color::parse(s), None, "{s}");
+        }
+    }
+
+    #[test]
+    fn hex_forms() {
+        assert_eq!(rgba("#f0c"), Some([1.0, 0.0, 204.0 / 255.0, 1.0]));
+        assert_eq!(rgba("#f0cf"), Some([1.0, 0.0, 204.0 / 255.0, 1.0]));
+        assert_eq!(rgba("#ff00cc"), Some([1.0, 0.0, 204.0 / 255.0, 1.0]));
+        assert_eq!(rgba("#ff00ccff"), Some([1.0, 0.0, 204.0 / 255.0, 1.0]));
+        assert_eq!(
+            rgba("#ff00cc80"),
+            Some([1.0, 0.0, 204.0 / 255.0, 128.0 / 255.0])
+        );
+        assert_eq!(rgba("  #FF00CC  "), Some([1.0, 0.0, 204.0 / 255.0, 1.0]));
+        for bad in [
+            "#",
+            "#f",
+            "#ff",
+            "#fffff",
+            "#fffffff",
+            "#fffffffff",
+            "#gggggg",
+        ] {
+            assert_eq!(Color::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn keywords_and_named_colors() {
+        assert_eq!(rgba("transparent"), Some([0.0, 0.0, 0.0, 0.0]));
+        assert_eq!(rgba("  TRANSPARENT "), Some([0.0, 0.0, 0.0, 0.0]));
+        assert_eq!(rgba("red"), Some([1.0, 0.0, 0.0, 1.0]));
+        let smoke = 245.0 / 255.0;
+        assert_eq!(rgba("WhiteSmoke"), Some([smoke, smoke, smoke, 1.0]));
+        // Names the 18-entry table used to miss.
+        assert_eq!(rgba("pink"), Some([1.0, 192.0 / 255.0, 203.0 / 255.0, 1.0]));
+        assert_eq!(rgba("gold"), Some([1.0, 215.0 / 255.0, 0.0, 1.0]));
+        assert_eq!(
+            rgba("darkgray"),
+            Some([169.0 / 255.0, 169.0 / 255.0, 169.0 / 255.0, 1.0])
+        );
+        assert_eq!(rgba("darkgrey"), rgba("darkgray"));
+        assert_eq!(
+            rgba("rebeccapurple"),
+            Some([102.0 / 255.0, 51.0 / 255.0, 153.0 / 255.0, 1.0])
+        );
+        assert_eq!(Color::parse("notacolor"), None);
+    }
+
+    #[test]
+    fn rgb_channels_are_clamped() {
+        assert_eq!(rgba("rgb(300, 0, 0)"), Some([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(rgba("rgb(-20, 0, 0)"), Some([0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(rgba("rgb(150%, 0%, 0%)"), Some([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(rgba("rgba(0,0,0,5)"), Some([0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(rgba("rgba(0,0,0,-1)"), Some([0.0, 0.0, 0.0, 0.0]));
+        assert_eq!(rgba("rgba(0,0,0,500%)"), Some([0.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn rgb_rejects_mixed_and_malformed_arguments() {
+        for bad in [
+            "rgb(50%, 0, 0)",       // % mixed with numbers
+            "rgb(0%, 0, 0%)",       // ditto
+            "rgb(0, 0 255)",        // comma mixed with space
+            "rgb(0 0, 255)",        // ditto
+            "rgb(0 0 255, 0.5)",    // space args then a comma alpha
+            "rgb(0, 0, 255 / 0.5)", // comma args then a slash alpha
+            "rgb(inf, 0, 0)",
+            "rgb(NaN, 0, 0)",
+            // Tokens the `[\de.+-]+` class admits but that are not numbers;
+            // they must stay NaN through the clamp and be rejected.
+            "rgb(1-1, 0, 0)",
+            "rgb(1e, 0, 0)",
+            "rgb(., 0, 0)",
+            "rgb(+, 0, 0)",
+            "rgb(0,0,255,0.5,9)", // extra argument
+            "rgb(0,0)",
+            "rgb(0,0,255",
+            "rgb(0,0,255))",
+            "rgb 0 0 255",
+        ] {
+            assert_eq!(Color::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn rgb_accepted_forms() {
+        assert_eq!(rgba("rgb(0, 0, 255)"), Some([0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(rgba("RGB(0,0,255)"), Some([0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(rgba("rgb(0 0 255)"), Some([0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(rgba("rgba(0, 0, 255, 0.5)"), Some([0.0, 0.0, 1.0, 0.5]));
+        assert_eq!(rgba("rgb(0 0 255 / 0.5)"), Some([0.0, 0.0, 1.0, 0.5]));
+        assert_eq!(rgba("rgb(0% 0% 100% /.6)"), Some([0.0, 0.0, 1.0, 0.6]));
+        assert_eq!(rgba("rgb(255 0 255 / 60%)"), Some([1.0, 0.0, 1.0, 0.6]));
+        assert_eq!(rgba("rgb(50%, 0%, 0%)"), Some([0.5, 0.0, 0.0, 1.0]));
+        assert_eq!(rgba("rgb(1e2, 0, 0)"), Some([100.0 / 255.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn hsl_forms_and_clamping() {
+        assert!(close(
+            rgba("hsl(120, 50%, 50%)").unwrap(),
+            [0.25, 0.75, 0.25, 1.0]
+        ));
+        assert!(close(
+            rgba("hsl(120deg 50% 50%)").unwrap(),
+            [0.25, 0.75, 0.25, 1.0]
+        ));
+        assert!(close(
+            rgba("hsla(120,50%,50%,0.5)").unwrap(),
+            [0.25, 0.75, 0.25, 0.5]
+        ));
+        assert!(close(
+            rgba("hsl(12e1 50% 50% / 90%)").unwrap(),
+            [0.25, 0.75, 0.25, 0.9]
+        ));
+        // s clamped to 100, so this is pure green rather than out-of-range rgb.
+        assert!(close(
+            rgba("hsl(120, 150%, 50%)").unwrap(),
+            [0.0, 1.0, 0.0, 1.0]
+        ));
+        assert!(close(
+            rgba("hsl(120, -50%, 50%)").unwrap(),
+            [0.5, 0.5, 0.5, 1.0]
+        ));
+        assert!(close(
+            rgba("hsl(120, 50%, 150%)").unwrap(),
+            [1.0, 1.0, 1.0, 1.0]
+        ));
+        for bad in [
+            "hsl(120, 50, 50%)", // percentages are required
+            "hsl(120, 50%, 50)",
+            "hsl(120 50%, 50%)", // mixed separators
+            "hsl(120, 50% 50%)",
+            "hsl(120rad, 50%, 50%)", // only `deg` is supported
+            "hsl(NaN, 50%, 50%)",
+            "hsl(120, 50%, 50%, 0.5, 9)",
+        ] {
+            assert_eq!(Color::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn parsed_channels_stay_in_range() {
+        for s in [
+            "rgb(300, -20, 999)",
+            "rgba(0,0,0,5)",
+            "hsl(120, 150%, 50%)",
+            "rgb(1e3% 0% 0%)",
+        ] {
+            let c = Color::parse(s).unwrap();
+            for v in c.to_rgba_unit() {
+                assert!((0.0..=1.0).contains(&v), "{s} -> {v}");
+            }
+        }
+    }
+
+    #[test]
+    fn lab_roundtrip_is_unchanged() {
+        assert_eq!(
+            Color::new(1.0, 1.0, 1.0, 1.0).to_lab(),
+            [100.0, 0.0, 0.0, 1.0]
+        );
+        for c in [
+            Color::new(0.2, 0.4, 0.6, 1.0),
+            Color::new(1.0, 0.0, 0.0, 0.5),
+            Color::new(0.0, 0.0, 0.0, 1.0),
+        ] {
+            let back = Color::from_lab(c.to_lab());
+            assert!((back.r - c.r).abs() < 1e-6 && (back.g - c.g).abs() < 1e-6);
+            let back = Color::from_hcl(c.to_hcl());
+            assert!((back.b - c.b).abs() < 1e-6);
+        }
+    }
 }

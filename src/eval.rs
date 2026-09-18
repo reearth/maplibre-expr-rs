@@ -13,7 +13,7 @@ use crate::value::{FormatSection, Value};
 type Result<T> = std::result::Result<T, EvalError>;
 
 /// Evaluate an expression against a context (no user extensions).
-pub fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
+pub(crate) fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
     let funcs = HashMap::new();
     let externals = HashMap::new();
     let mut ev = Evaluator {
@@ -27,7 +27,7 @@ pub fn eval(expr: &Expr, ctx: &EvaluationContext) -> Result<Value> {
 }
 
 /// Evaluate with expression functions and external functions from [`Options`].
-pub fn eval_with(expr: &Expr, ctx: &EvaluationContext, opts: &Options) -> Result<Value> {
+pub(crate) fn eval_with(expr: &Expr, ctx: &EvaluationContext, opts: &Options) -> Result<Value> {
     // Bodies are parsed once per `Options` and cached; see `Options::compiled_fns`.
     let funcs = opts
         .compiled_fns()
@@ -261,8 +261,13 @@ impl Evaluator<'_> {
     /// (e.g. `"red"`, `"#f00"`) to colors as MapLibre does when the output
     /// type is `color`.
     fn eval_interp_output(&mut self, expr: &Expr) -> Result<Value> {
-        // Interpolation outputs can only be numbers, colors, or number arrays,
-        // so a bare string output is always a color to be parsed.
+        // Interpolatable outputs are wider than numbers and colors — padding,
+        // colorArray, projectionDefinition and variableAnchorOffsetCollection
+        // interpolate too (see `is_interpolatable`). Those all reach here
+        // already converted, because type-checking against the property's
+        // expected type wraps each stop in the matching coercion. A *bare*
+        // string therefore only survives to this point when the expected type
+        // was unknown, where MapLibre reads it as a color literal.
         match self.eval(expr)? {
             Value::String(s) => match Color::parse(&s) {
                 Some(c) => Ok(Value::Color(c)),
@@ -550,7 +555,7 @@ impl Evaluator<'_> {
         if index >= array.len() as f64 {
             return Err(EvalError::of(EvalErrorKind::ArrayIndexOutOfBounds {
                 index,
-                max: array.len().saturating_sub(1),
+                max: array.len() as i64 - 1,
             }));
         }
         if index != index.trunc() {
@@ -699,24 +704,31 @@ impl Evaluator<'_> {
     fn op_cmp(&mut self, op: &str, args: &[Expr], ord: Ordering) -> Result<Value> {
         let a = self.eval(&args[0])?;
         let b = self.eval(&args[1])?;
-        if let Some(c) = self.eval_collator(args)? {
-            return Ok(Value::Bool(ord.test(collator_compare(&c, &a, &b))));
-        }
+        // The runtime type check comes first, before the collator is even
+        // looked at: MapLibre throws in `comparison.ts:167-179` and only then
+        // reaches the `this.collator ? …` return on line 189. A collator on an
+        // untyped ordered comparison must therefore not smuggle non-string,
+        // non-number operands past this.
         let result = match (&a, &b) {
             (Value::Number(x), Value::Number(y)) => ord.test(x.partial_cmp(y)),
             (Value::String(x), Value::String(y)) => ord.test(Some(x.cmp(y))),
             // Reached only when both operands were statically `value` (a single
             // typed operand is asserted at type-check time), so their runtime
             // types disagree or aren't ordered — MapLibre's combined-signature
-            // error.
+            // error. It names the bare type *kinds* (`${lt.kind}`), not the
+            // `typeToString` rendering, so an array is `array`, not
+            // `array<number, 1>`.
             _ => {
                 return Err(EvalError::of(EvalErrorKind::NotOrderedComparable {
                     op: op.to_string(),
-                    lhs: runtime_type_str(&a),
-                    rhs: runtime_type_str(&b),
+                    lhs: a.type_name().to_string(),
+                    rhs: b.type_name().to_string(),
                 }))
             }
         };
+        if let Some(c) = self.eval_collator(args)? {
+            return Ok(Value::Bool(ord.test(collator_compare(&c, &a, &b))));
+        }
         Ok(Value::Bool(result))
     }
 
@@ -872,23 +884,122 @@ impl Evaluator<'_> {
         Err(type_error(&desc, &last))
     }
 
+    /// `to-number`, transcribing `Coercion.evaluate`'s `'number'` case
+    /// (`src/expression/definitions/coercion.ts:153-163`):
+    ///
+    /// ```js
+    /// let value = null;
+    /// for (const arg of this.args) {
+    ///     value = arg.evaluate(ctx);
+    ///     if (value === null) return 0;
+    ///     const num = Number(value);
+    ///     if (isNaN(num)) continue;
+    ///     return num;
+    /// }
+    /// throw new RuntimeError(`Could not convert ${JSON.stringify(value)} to number.`);
+    /// ```
+    ///
+    /// Two details are easy to lose. `null` short-circuits to `0` *without*
+    /// trying the remaining arguments, while every other non-numeric argument
+    /// falls through to the next one. And `isNaN(num) → continue` covers a NaN
+    /// that arrives as a number as much as one produced by the conversion, so
+    /// `["to-number", NaN]` throws rather than answering NaN — with
+    /// `JSON.stringify(NaN)` being `"null"`, hence
+    /// `Could not convert null to number.`
     fn op_to_number(&mut self, args: &[Expr]) -> Result<Value> {
+        /// `Number(string)` (ECMA-262 §7.1.4.1, `StringToNumber`). `None` is
+        /// JavaScript's `NaN`.
+        fn number_from_str(s: &str) -> Option<f64> {
+            // `StrWhiteSpace` is Unicode whitespace plus U+FEFF; an all-blank
+            // (or empty) string is `0`.
+            let t = s.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+            if t.is_empty() {
+                return Some(0.0);
+            }
+            match t {
+                "Infinity" | "+Infinity" => return Some(f64::INFINITY),
+                "-Infinity" => return Some(f64::NEG_INFINITY),
+                _ => {}
+            }
+            // `NonDecimalIntegerLiteral`: unsigned, and with at least one digit.
+            if let Some(radix) = match t.get(..2) {
+                Some("0x" | "0X") => Some(16u32),
+                Some("0o" | "0O") => Some(8),
+                Some("0b" | "0B") => Some(2),
+                _ => None,
+            } {
+                let digits = &t[2..];
+                if digits.is_empty() {
+                    return None;
+                }
+                // Accumulated in `f64` rather than an integer so that literals
+                // beyond `u128` round to the nearest double instead of
+                // overflowing, as JavaScript's `MV` does.
+                let mut acc = 0.0f64;
+                for c in digits.chars() {
+                    let d = c.to_digit(radix)?;
+                    acc = acc * f64::from(radix) + f64::from(d);
+                }
+                return Some(acc);
+            }
+            // `StrDecimalLiteral`. Rust's `f64::from_str` accepts exactly this
+            // grammar *plus* `inf`, `infinity` and `nan`, which JavaScript does
+            // not — rejecting every letter but the exponent's `e` rules those
+            // out (`Infinity` itself was handled above).
+            if t.chars()
+                .any(|c| c.is_ascii_alphabetic() && c != 'e' && c != 'E')
+            {
+                return None;
+            }
+            t.parse::<f64>().ok()
+        }
+
+        /// `Number(value)`, i.e. `ToNumber(ToPrimitive(value))`. `None` is NaN.
+        fn number_of(v: &Value) -> Option<f64> {
+            match v {
+                Value::Null => Some(0.0),
+                Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+                Value::Number(n) => Some(*n),
+                Value::String(s) => number_from_str(s),
+                // An array coerces through `Array.prototype.toString`, so
+                // `["to-number", ["literal", [7]]]` is `7` and `[]` is `0`.
+                // Any other element type stringifies to something non-numeric
+                // (`"[object Object]"`, `"rgba(…)"`), which is NaN either way.
+                Value::Array(items) => number_from_str(&array_to_string(items)?),
+                _ => None,
+            }
+        }
+
+        /// `Array.prototype.toString`: elements joined by `","`, with `null`
+        /// contributing the empty string. `None` where an element has no
+        /// numeric-looking stringification, which makes the whole join NaN.
+        fn array_to_string(items: &[Value]) -> Option<String> {
+            let mut out = String::new();
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                match item {
+                    Value::Null => {}
+                    Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+                    Value::Number(n) => out.push_str(&crate::value::format_number(*n)),
+                    Value::String(s) => out.push_str(s),
+                    Value::Array(nested) => out.push_str(&array_to_string(nested)?),
+                    _ => return None,
+                }
+            }
+            Some(out)
+        }
+
         let mut last = Value::Null;
         for a in args {
             last = self.eval(a)?;
-            match &last {
-                Value::Number(n) => return Ok(Value::Number(*n)),
-                Value::Null => return Ok(Value::Number(0.0)),
-                Value::Bool(b) => return Ok(Value::Number(if *b { 1.0 } else { 0.0 })),
-                Value::String(s) => {
-                    let trimmed = s.trim();
-                    if trimmed.is_empty() {
-                        return Ok(Value::Number(0.0));
-                    }
-                    if let Ok(n) = trimmed.parse::<f64>() {
-                        return Ok(Value::Number(n));
-                    }
-                }
+            if matches!(last, Value::Null) {
+                return Ok(Value::Number(0.0));
+            }
+            match number_of(&last) {
+                Some(n) if !n.is_nan() => return Ok(Value::Number(n)),
+                // `isNaN(num) → continue`.
                 _ => {}
             }
         }
@@ -905,17 +1016,9 @@ impl Evaluator<'_> {
                 return Ok(Value::Color(c));
             }
         }
-        Err(match &last {
-            // An array of the wrong length/shape has its own message.
-            Value::Array(_) => EvalError::of(EvalErrorKind::InvalidRgba {
-                value: json_stringify(&last),
-                reason: "expected an array containing either three or four numeric values.",
-            }),
-            other => EvalError::of(EvalErrorKind::CouldNotParse {
-                ty: "color",
-                value: coercion_value_repr(other),
-            }),
-        })
+        // MapLibre keeps the error from the *last* argument only (`error` is
+        // reset each iteration), so the message comes from `last`.
+        Err(color_coercion_error(&last))
     }
 
     fn op_to_rgba(&mut self, args: &[Expr]) -> Result<Value> {
@@ -1066,14 +1169,31 @@ fn type_error(expected: &str, found: &Value) -> EvalError {
     })
 }
 
+/// A JSON string literal, with the escaping JSON actually specifies (``,
+/// not Rust's `\u{7}`).
+fn json_quote(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\""))
+}
+
+/// A number as `JSON.stringify` writes it: the same rendering as `String(n)`,
+/// except that the non-finite values become `null` rather than `NaN` /
+/// `Infinity`, which are not JSON.
+fn json_number(n: f64) -> String {
+    if n.is_finite() {
+        crate::value::format_number(n)
+    } else {
+        "null".to_string()
+    }
+}
+
 /// A `JSON.stringify`-equivalent rendering of a value (strings quoted, arrays
 /// and objects compact), used verbatim in several MapLibre error messages.
 fn json_stringify(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
-        Value::Number(n) => crate::value::format_number(*n),
-        Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\"")),
+        Value::Number(n) => json_number(*n),
+        Value::String(s) => json_quote(s),
         Value::Array(a) => {
             let parts: Vec<String> = a.iter().map(json_stringify).collect();
             format!("[{}]", parts.join(","))
@@ -1081,10 +1201,7 @@ fn json_stringify(v: &Value) -> String {
         Value::Object(o) => {
             let parts: Vec<String> = o
                 .iter()
-                .map(|(k, val)| {
-                    let key = serde_json::to_string(k).unwrap_or_else(|_| format!("\"{k}\""));
-                    format!("{key}:{}", json_stringify(val))
-                })
+                .map(|(k, val)| format!("{}:{}", json_quote(k), json_stringify(val)))
                 .collect();
             format!("{{{}}}", parts.join(","))
         }
@@ -1145,12 +1262,11 @@ fn coerce_value(ty: &Type, v: Value) -> Result<Value> {
             }
             _ => Err(type_error("number", &v)),
         },
+        // The implicit coercion is the same `Coercion` expression as an
+        // explicit `to-color`, so it raises the same errors.
         Type::Color => match coerce_color(&v) {
             Some(c) => Ok(Value::Color(c)),
-            None => Err(EvalError::of(EvalErrorKind::CouldNotParse {
-                ty: "color",
-                value: coercion_value_repr(&v),
-            })),
+            None => Err(color_coercion_error(&v)),
         },
         Type::Formatted => Ok(match v {
             Value::Formatted(_) => v,
@@ -1291,26 +1407,45 @@ fn js_string(v: &Value) -> String {
     }
 }
 
-/// `String.prototype.indexOf` over code points: negative `from` clamps to 0.
+/// `String.prototype.indexOf`, as MapLibre's `IndexOf` calls it
+/// (`src/expression/definitions/index_of.ts:72-81`): the search itself — and
+/// therefore `from` — is in UTF-16 code units, and only the *result* is
+/// converted to code points, by `[...haystack.slice(0, rawIndex)].length`.
+///
+/// So `["index-of", "a", "𝐀ab", 2]` is `1`: the match is at UTF-16 index 2,
+/// which is code point 1. Treating `from` as a code point index instead would
+/// start the search past the `"a"` and wrongly answer `-1`.
+///
+/// A negative `from` clamps to 0.
 fn str_index_of(hay: &str, needle: &str, from: Option<f64>) -> f64 {
-    let hay: Vec<char> = hay.chars().collect();
-    let needle: Vec<char> = needle.chars().collect();
+    let hay: Vec<u16> = hay.encode_utf16().collect();
+    let needle: Vec<u16> = needle.encode_utf16().collect();
+    // Code points in `hay[..units]`. A well-formed UTF-16 sequence has exactly
+    // one low surrogate per astral code point, so subtracting them counts code
+    // points; a `from` landing between a pair leaves its high surrogate
+    // counted, which is what spreading `haystack.slice(0, rawIndex)` does too.
+    let code_points = |units: usize| {
+        hay[..units]
+            .iter()
+            .filter(|u| !(0xDC00..0xE000).contains(*u))
+            .count() as f64
+    };
     let start = from.map_or(0, |f| {
-        if f < 0.0 {
+        if f < 0.0 || f.is_nan() {
             0
         } else {
             (f as usize).min(hay.len())
         }
     });
     if needle.is_empty() {
-        return start.min(hay.len()) as f64;
+        return code_points(start.min(hay.len()));
     }
     if needle.len() > hay.len() {
         return -1.0;
     }
     for i in start..=hay.len() - needle.len() {
         if hay[i..i + needle.len()] == needle[..] {
-            return i as f64;
+            return code_points(i);
         }
     }
     -1.0
@@ -1348,12 +1483,20 @@ fn js_slice_bounds(begin: f64, end: Option<f64>, len: usize) -> (usize, usize) {
 }
 
 /// Coerce a value to a [`Color`]: pass colors through, parse CSS strings, and
-/// read `[r, g, b]` / `[r, g, b, a]` numeric arrays (channels in `0..=255`).
+/// read `[r, g, b]` / `[r, g, b, a]` numeric arrays (channels in `0..=255`,
+/// alpha in `0..=1`).
+///
+/// Arrays go through the same `validateRGBA` check as `["rgb", …]`
+/// (`src/expression/values.ts:31-51`), which MapLibre's `Coercion` applies
+/// before building the `Color` (`src/expression/definitions/coercion.ts:76-89`).
 fn coerce_color(v: &Value) -> Option<Color> {
     match v {
         Value::Color(c) => Some(*c),
         Value::String(s) => Color::parse(s),
         Value::Array(a) if a.len() == 3 || a.len() == 4 => {
+            if rgba_array_error(a).is_some() {
+                return None;
+            }
             let n = |i: usize| a.get(i).and_then(Value::as_number);
             match (n(0), n(1), n(2)) {
                 (Some(r), Some(g), Some(b)) => {
@@ -1363,6 +1506,60 @@ fn coerce_color(v: &Value) -> Option<Color> {
             }
         }
         _ => None,
+    }
+}
+
+/// MapLibre's `validateRGBA` (`src/expression/values.ts:31-51`) applied to an
+/// `[r, g, b]` / `[r, g, b, a]` array: the rendered value and the clause that
+/// follows it, or `None` when the array is a valid colour.
+///
+/// The value is rendered with JavaScript's `Array.prototype.join(', ')`, i.e.
+/// each element through `String(x)` and *not* through `JSON.stringify` — so a
+/// bad string channel reads `[a, b, c]`, unquoted.
+fn rgba_array_error(a: &[Value]) -> Option<(String, &'static str)> {
+    let n = |i: usize| a.get(i).and_then(Value::as_number);
+    let render = |with_alpha: bool| {
+        let end = if with_alpha { 4 } else { 3 };
+        let parts: Vec<String> = a.iter().take(end).map(js_string).collect();
+        format!("[{}]", parts.join(", "))
+    };
+    // `(0.0..=255.0).contains` is false for NaN, matching `r >= 0 && r <= 255`.
+    let in_range = |x: Option<f64>, hi: f64| x.is_some_and(|x| (0.0..=hi).contains(&x));
+    if !(in_range(n(0), 255.0) && in_range(n(1), 255.0) && in_range(n(2), 255.0)) {
+        // `a` is only part of the message when it is a number, mirroring
+        // `typeof a === 'number' ? [r, g, b, a] : [r, g, b]`.
+        let with_alpha = n(3).is_some();
+        return Some((
+            render(with_alpha),
+            "'r', 'g', and 'b' must be between 0 and 255.",
+        ));
+    }
+    // Alpha is optional; when present it must be a number in `0..=1`.
+    if a.len() > 3 && !in_range(n(3), 1.0) {
+        return Some((render(true), "'a' must be between 0 and 1."));
+    }
+    None
+}
+
+/// The runtime error MapLibre's `Coercion` throws for a value that cannot
+/// become a colour: the `validateRGBA` message for an `[r, g, b(, a)]`-shaped
+/// array, the length message for any other array, and the generic
+/// "Could not parse color" otherwise (`coercion.ts:76-95`).
+fn color_coercion_error(v: &Value) -> EvalError {
+    match v {
+        Value::Array(a) if a.len() == 3 || a.len() == 4 => {
+            let (value, reason) = rgba_array_error(a)
+                .expect("coerce_color only fails on a 3/4-element array when validateRGBA does");
+            EvalError::of(EvalErrorKind::InvalidRgba { value, reason })
+        }
+        Value::Array(_) => EvalError::of(EvalErrorKind::InvalidRgba {
+            value: json_stringify(v),
+            reason: "expected an array containing either three or four numeric values.",
+        }),
+        other => EvalError::of(EvalErrorKind::CouldNotParse {
+            ty: "color",
+            value: coercion_value_repr(other),
+        }),
     }
 }
 
@@ -1386,14 +1583,20 @@ fn to_string_value(v: &Value) -> String {
     }
 }
 
-/// Compact JSON serialization for `to-string`/`concat` of arrays and objects.
+/// Compact JSON serialization for `to-string`/`concat` of arrays and objects —
+/// the `JSON.stringify` branch of MapLibre's `valueToString`
+/// (`src/expression/values.ts:160-179`).
+///
+/// Strings are escaped as JSON, not with Rust's `{:?}`: the two agree on `\n`
+/// and `"` but not on control characters, where `{:?}` writes Rust syntax
+/// (`\u{7}`) instead of JSON's ``.
 fn json_string(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
-        Value::Number(n) => crate::value::format_number(*n),
-        Value::String(s) => format!("{s:?}"),
-        Value::Color(c) => format!("{:?}", c.to_string()),
+        Value::Number(n) => json_number(*n),
+        Value::String(s) => json_quote(s),
+        Value::Color(c) => json_quote(&c.to_string()),
         Value::Array(a) => {
             let parts: Vec<String> = a.iter().map(json_string).collect();
             format!("[{}]", parts.join(","))
@@ -1401,16 +1604,19 @@ fn json_string(v: &Value) -> String {
         Value::Object(o) => {
             let parts: Vec<String> = o
                 .iter()
-                .map(|(k, val)| format!("{k:?}:{}", json_string(val)))
+                .map(|(k, val)| format!("{}:{}", json_quote(k), json_string(val)))
                 .collect();
             format!("{{{}}}", parts.join(","))
         }
         Value::Image { name, available } => {
-            format!("{{\"name\":{name:?},\"available\":{available}}}")
+            format!(
+                "{{\"name\":{},\"available\":{available}}}",
+                json_quote(name)
+            )
         }
         Value::Formatted(sections) => {
             let s: String = sections.iter().map(|s| s.text.clone()).collect();
-            format!("{s:?}")
+            json_quote(&s)
         }
         Value::NumberArray(_) | Value::Padding(_) => {
             let nums = match v {
@@ -1418,14 +1624,11 @@ fn json_string(v: &Value) -> String {
                 Value::Padding(a) => a.to_vec(),
                 _ => unreachable!(),
             };
-            let parts: Vec<String> = nums
-                .iter()
-                .map(|n| crate::value::format_number(*n))
-                .collect();
+            let parts: Vec<String> = nums.iter().map(|n| json_number(*n)).collect();
             format!("{{\"values\":[{}]}}", parts.join(","))
         }
         Value::ColorArray(_) | Value::Projection(_) | Value::Collator { .. } => {
-            format!("{:?}", v.to_string())
+            json_quote(&v.to_string())
         }
     }
 }
@@ -1786,4 +1989,292 @@ fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::
         return None;
     };
     Some(to_string_value(a).cmp(&to_string_value(b)))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{evaluate, parse, typecheck, EvaluationContext, Feature, Value};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    /// A control character that JSON escapes as `` but Rust's `{:?}`
+    /// writes as `\u{7}`.
+    const BEL: char = '\u{7}';
+
+    /// Evaluate an expression against a feature with `props`, returning the
+    /// value or the rendered error message.
+    ///
+    /// Type-checking constant-folds, so an expression over literals raises its
+    /// runtime error there instead; the message is the same either way, and
+    /// both are reported here as `Err`.
+    fn run(expr: serde_json::Value, props: &[(&str, Value)]) -> Result<Value, String> {
+        let parsed = parse(&expr).expect("parses");
+        let checked = typecheck(&parsed, None, false).map_err(|e| e.to_string())?;
+        let properties: BTreeMap<String, Value> = props
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), v.clone()))
+            .collect();
+        let ctx = EvaluationContext::new().with_feature(Feature {
+            properties,
+            ..Feature::default()
+        });
+        evaluate(&checked, &ctx).map_err(|e| e.to_string())
+    }
+
+    fn eval_str(expr: serde_json::Value) -> String {
+        match run(expr, &[]) {
+            Ok(Value::String(s)) => s,
+            other => panic!("expected a string, got {other:?}"),
+        }
+    }
+
+    fn eval_err(expr: serde_json::Value, props: &[(&str, Value)]) -> String {
+        match run(expr, props) {
+            Err(e) => e,
+            Ok(v) => panic!("expected an error, got {v:?}"),
+        }
+    }
+
+    /// B2: `to-string` is the user-visible face of `format_number`, and the
+    /// window `[2^63, 1e21)` used to saturate at `i64::MAX`.
+    #[test]
+    fn to_string_of_large_and_small_numbers_matches_javascript() {
+        let cases: &[(f64, &str)] = &[
+            (1e18, "1000000000000000000"),
+            (1e19, "10000000000000000000"),
+            (1e20, "100000000000000000000"),
+            (1e21, "1e+21"),
+            (1e-6, "0.000001"),
+            (1e-7, "1e-7"),
+            (-0.0, "0"),
+        ];
+        for (n, expected) in cases {
+            assert_eq!(
+                eval_str(json!(["to-string", n])),
+                *expected,
+                "to-string {n}"
+            );
+        }
+        // Non-finite results have to be produced, not written as literals.
+        assert_eq!(eval_str(json!(["to-string", ["/", 1, 0]])), "Infinity");
+        assert_eq!(eval_str(json!(["to-string", ["/", -1, 0]])), "-Infinity");
+        assert_eq!(
+            eval_str(json!(["to-string", ["-", ["/", 1, 0], ["/", 1, 0]]])),
+            "NaN"
+        );
+        // `concat` goes through the same renderer.
+        assert_eq!(
+            eval_str(json!(["concat", 1e20, "!"])),
+            "100000000000000000000!"
+        );
+    }
+
+    /// B2 must not disturb `number-format`, which formats through its own
+    /// US-decimal grouping path rather than `format_number`.
+    #[test]
+    fn number_format_still_groups_large_integers() {
+        assert_eq!(
+            eval_str(json!(["number-format", 1e20, {}])),
+            "100,000,000,000,000,000,000"
+        );
+    }
+
+    /// B9: `to-string` of an array is JSON, so a control character comes out
+    /// as a JSON escape, not as Rust's `{:?}` syntax.
+    #[test]
+    fn to_string_of_array_is_json_not_rust_debug() {
+        let rendered = eval_str(json!(["to-string", ["literal", [format!("a{BEL}b")]]]));
+        // The rendering has to *be* JSON: it must parse back to the input.
+        let back: serde_json::Value =
+            serde_json::from_str(&rendered).expect("to-string of an array is JSON");
+        assert_eq!(back, json!([format!("a{BEL}b")]));
+        // Specifically, not Rust's `{:?}`, which writes a `\u{N}` escape.
+        assert!(
+            !rendered.contains("u{"),
+            "Rust-syntax escape in {rendered:?}"
+        );
+        assert!(
+            !rendered.contains(BEL),
+            "unescaped control char in {rendered:?}"
+        );
+
+        let rendered = eval_str(json!(["to-string", ["literal", {format!("k{BEL}"): 1}]]));
+        let back: serde_json::Value =
+            serde_json::from_str(&rendered).expect("to-string of an object is JSON");
+        assert_eq!(back, json!({format!("k{BEL}"): 1}));
+        assert!(
+            !rendered.contains("u{"),
+            "Rust-syntax escape in {rendered:?}"
+        );
+
+        // The cases that already agreed must keep agreeing, byte for byte.
+        assert_eq!(
+            eval_str(json!(["to-string", ["literal", ["a\nb\"c"]]])),
+            r#"["a\nb\"c"]"#
+        );
+    }
+
+    /// B9, second half: `JSON.stringify` writes `null` for the non-finite
+    /// numbers, which `String(n)` does not. Reachable through the `to-color`
+    /// error message, whose operand is rendered with `JSON.stringify`.
+    #[test]
+    fn json_stringify_renders_non_finite_numbers_as_null() {
+        let nan = json!(["-", ["/", 1, 0], ["/", 1, 0]]);
+        assert_eq!(
+            eval_err(json!(["to-color", nan]), &[]),
+            "Could not parse color from value 'null'"
+        );
+        assert_eq!(
+            eval_err(json!(["to-color", ["/", 1, 0]]), &[]),
+            "Could not parse color from value 'null'"
+        );
+        // A non-finite number *inside* an array operand too.
+        assert_eq!(
+            eval_err(json!(["to-color", ["literal", [1, 2, 3, 4, 5]]]), &[]),
+            "Invalid rgba value [1,2,3,4,5]: expected an array containing either three or four numeric values."
+        );
+    }
+
+    /// B4: `to-color` validates the RGBA range the way `["rgb", …]` does.
+    #[test]
+    fn to_color_validates_rgba_range() {
+        assert_eq!(
+            eval_err(json!(["to-color", ["literal", [300, 0, 0]]]), &[]),
+            "Invalid rgba value [300, 0, 0]: 'r', 'g', and 'b' must be between 0 and 255."
+        );
+        assert_eq!(
+            eval_err(json!(["to-color", ["literal", [-1, 0, 0]]]), &[]),
+            "Invalid rgba value [-1, 0, 0]: 'r', 'g', and 'b' must be between 0 and 255."
+        );
+        assert_eq!(
+            eval_err(json!(["to-color", ["literal", [0, 0, 0, 5]]]), &[]),
+            "Invalid rgba value [0, 0, 0, 5]: 'a' must be between 0 and 1."
+        );
+        // A non-numeric channel gets the range message too, with the elements
+        // rendered by `String(x)` (unquoted), not `JSON.stringify`.
+        assert_eq!(
+            eval_err(json!(["to-color", ["literal", ["a", "b", "c"]]]), &[]),
+            "Invalid rgba value [a, b, c]: 'r', 'g', and 'b' must be between 0 and 255."
+        );
+        // Only a wrong *length* keeps the length message.
+        assert_eq!(
+            eval_err(json!(["to-color", ["literal", [1, 2]]]), &[]),
+            "Invalid rgba value [1,2]: expected an array containing either three or four numeric values."
+        );
+        // In range still works.
+        assert!(matches!(
+            run(json!(["to-color", ["literal", [255, 0, 0]]]), &[]),
+            Ok(Value::Color(_))
+        ));
+    }
+
+    /// B4: the implicit `Coerce(Color)` is the same expression upstream, so it
+    /// raises the same error.
+    #[test]
+    fn implicit_color_coercion_validates_rgba_range() {
+        let parsed = parse(&json!(["get", "c"])).unwrap();
+        let checked = typecheck(&parsed, Some(&crate::Type::Color), false).unwrap();
+        let mut properties = BTreeMap::new();
+        properties.insert(
+            "c".to_string(),
+            Value::Array(vec![
+                Value::Number(300.0),
+                Value::Number(0.0),
+                Value::Number(0.0),
+            ]),
+        );
+        let ctx = EvaluationContext::new().with_feature(Feature {
+            properties,
+            ..Feature::default()
+        });
+        assert_eq!(
+            evaluate(&checked, &ctx).unwrap_err().to_string(),
+            "Invalid rgba value [300, 0, 0]: 'r', 'g', and 'b' must be between 0 and 255."
+        );
+    }
+
+    /// C13: `from` is a UTF-16 index, only the result is in code points.
+    #[test]
+    fn index_of_from_is_a_utf16_index() {
+        // "𝐀" is one code point but two UTF-16 units, so `from: 2` still finds
+        // the "a" that follows it — at code point 1.
+        assert_eq!(
+            run(json!(["index-of", "a", "𝐀ab", 2]), &[]),
+            Ok(Value::Number(1.0))
+        );
+        assert_eq!(
+            run(json!(["index-of", "b", "𝐀ab", 2]), &[]),
+            Ok(Value::Number(2.0))
+        );
+        assert_eq!(
+            run(json!(["index-of", "a", "𝐀ab", 3]), &[]),
+            Ok(Value::Number(-1.0))
+        );
+        // Results stay in code points with no `from`, as before.
+        assert_eq!(
+            run(json!(["index-of", "a", "𝐀ab"]), &[]),
+            Ok(Value::Number(1.0))
+        );
+        assert_eq!(
+            run(json!(["length", "丐𦨭市镇"]), &[]),
+            Ok(Value::Number(4.0))
+        );
+        // Negative `from` clamps to 0; BMP-only strings are unaffected.
+        assert_eq!(
+            run(json!(["index-of", "b", "abcb", -5]), &[]),
+            Ok(Value::Number(1.0))
+        );
+        assert_eq!(
+            run(json!(["index-of", "b", "abcb", 2]), &[]),
+            Ok(Value::Number(3.0))
+        );
+    }
+
+    /// C14 + C15: an ordered comparison type-checks its operands at runtime
+    /// before the collator is consulted, and the error names bare type kinds.
+    #[test]
+    fn ordered_comparison_checks_types_before_the_collator() {
+        let arrays: &[(&str, Value)] = &[
+            ("a", Value::Array(vec![Value::Number(1.0)])),
+            ("b", Value::Array(vec![Value::Number(2.0)])),
+        ];
+        let expected = "Expected arguments for \"<\" to be (string, string) or (number, number), but found (array, array) instead.";
+        // Without a collator — and, since C14, with one too.
+        assert_eq!(
+            eval_err(json!(["<", ["get", "a"], ["get", "b"]]), arrays),
+            expected
+        );
+        assert_eq!(
+            eval_err(
+                json!(["<", ["get", "a"], ["get", "b"], ["collator", {}]]),
+                arrays
+            ),
+            expected
+        );
+        // Missing properties are `null`; non-array operands were already right.
+        assert_eq!(
+            eval_err(json!(["<", ["get", "a"], ["get", "b"]]), &[]),
+            "Expected arguments for \"<\" to be (string, string) or (number, number), but found (null, null) instead."
+        );
+        // A collator over two runtime strings still compares with the collator.
+        let strings: &[(&str, Value)] = &[
+            ("a", Value::String("a".to_string())),
+            ("b", Value::String("b".to_string())),
+        ];
+        assert_eq!(
+            run(
+                json!(["<", ["get", "a"], ["get", "b"], ["collator", {}]]),
+                strings
+            ),
+            Ok(Value::Bool(true))
+        );
+        // …and `==` still only uses the collator for two runtime strings.
+        assert_eq!(
+            run(
+                json!(["==", ["get", "a"], ["get", "b"], ["collator", {}]]),
+                arrays
+            ),
+            Ok(Value::Bool(false))
+        );
+    }
 }

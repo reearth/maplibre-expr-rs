@@ -37,6 +37,7 @@ use crate::ext::Options;
 
 /// A legacy filter that could not be converted to an expression.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum FilterError {
     /// A property operand of a legacy comparison/`in`/`has` was not a string
     /// (legacy filters name the property with a bare string). `op` is the
@@ -61,6 +62,7 @@ impl std::error::Error for FilterError {}
 /// (structurally malformed legacy filter) or an expression parse error on the
 /// converted result.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ParseFilterError {
     /// The input was a malformed *legacy* filter that [`convert_legacy_filter`]
     /// could not rewrite (e.g. a non-string property operand).
@@ -165,26 +167,44 @@ pub fn is_expression_filter(filter: &Json) -> bool {
     }
 }
 
-/// Whether an expression-classified `all`/`any`/`none` combiner still hides a
-/// legacy-only leaf that [`convert`] should rewrite.
+/// The child slots [`has_convertible_legacy_leaf`] and [`convert`] descend
+/// into, or `None` for an operator that is not descended.
 ///
-/// `is_expression_filter` promotes a combiner to an expression as soon as *one*
-/// child is a genuine expression, even when siblings are legacy-only (e.g. a
-/// three-arg `["==", "prop", value]` or `["!has", …]`). Upstream MapLibre
-/// rejects that mix; we instead convert the legacy leaves. Only combiners are
-/// descended — a legacy shape nested inside some other expression operator is
-/// not something MapLibre (or we) auto-convert.
+/// A verbatim port of the `switch` in upstream's `findMixedLegacyFilter`
+/// (`src/feature_filter/index.ts`): every argument of `all`/`any`/`none`, the
+/// single operand of `!`, and the *condition* slots of `case` (1, 3, 5, … while
+/// below `len - 1`; the output slots and the fallback are not conditions).
+fn descendable_slots(arr: &[Json]) -> Option<Vec<usize>> {
+    match arr.first().and_then(Json::as_str)? {
+        "all" | "any" | "none" => Some((1..arr.len()).collect()),
+        "!" => Some(vec![1]),
+        "case" => Some((1..arr.len().saturating_sub(1)).step_by(2).collect()),
+        _ => None,
+    }
+}
+
+/// Whether an expression-classified combiner still hides a legacy-only leaf
+/// that [`convert`] should rewrite.
+///
+/// `is_expression_filter` promotes an `all`/`any`/`none` to an expression as
+/// soon as *one* child is a genuine expression, even when siblings are
+/// legacy-only (e.g. a three-arg `["==", "prop", value]` or `["!has", …]`);
+/// `!` and `case` are classified as expressions unconditionally, so a legacy
+/// leaf under them is never even looked at. Upstream MapLibre rejects all of
+/// these mixes outright; we instead convert the legacy leaves in place.
+///
+/// The set of slots descended is exactly upstream's — see
+/// [`descendable_slots`] — so the shapes we rewrite are the shapes upstream
+/// diagnoses, no more: a legacy shape nested inside some other expression
+/// operator is not something MapLibre (or we) auto-convert.
 fn has_convertible_legacy_leaf(filter: &Json) -> bool {
     let Some(arr) = filter.as_array() else {
         return false;
     };
-    if !matches!(
-        arr.first().and_then(Json::as_str),
-        Some("all") | Some("any") | Some("none")
-    ) {
+    let Some(slots) = descendable_slots(arr) else {
         return false;
-    }
-    arr[1..].iter().any(|child| {
+    };
+    slots.into_iter().filter_map(|i| arr.get(i)).any(|child| {
         child.is_array() && (!is_expression_filter(child) || has_convertible_legacy_leaf(child))
     })
 }
@@ -256,12 +276,12 @@ impl ExpectedTypes {
 
 fn convert(filter: &Json, expected: &mut ExpectedTypes) -> Result<Json, FilterError> {
     // A genuine expression passes through unchanged — *unless* it is an
-    // `all`/`any`/`none` combiner that (per `is_expression_filter`) classifies
-    // as an expression only because some child is one, yet still carries a
-    // legacy-only leaf. Upstream MapLibre rejects such mixed filters; we instead
-    // descend and convert the legacy leaves in place (the combiner arms below
-    // recurse per child, so genuine expression children still pass through),
-    // which lets real-world styles like Protomaps basemap render.
+    // `all`/`any`/`none`/`!`/`case` combiner that classifies as an expression
+    // (per `is_expression_filter`) yet still carries a legacy-only leaf.
+    // Upstream MapLibre rejects such mixed filters; we instead descend and
+    // convert the legacy leaves in place (the combiner arms below recurse per
+    // child, so genuine expression children still pass through), which lets
+    // real-world styles like Protomaps basemap render.
     if is_expression_filter(filter) && !has_convertible_legacy_leaf(filter) {
         return Ok(filter.clone());
     }
@@ -274,9 +294,12 @@ fn convert(filter: &Json, expected: &mut ExpectedTypes) -> Result<Json, FilterEr
         return Ok(json!(true));
     };
 
-    let op = arr[0].as_str();
+    // Upstream reads `filter[0]` first (`undefined` for `[]`) and only then
+    // length-checks, so the operator lookup must tolerate an empty array:
+    // `[]` -> `undefined !== 'any'` -> true.
+    let op = arr.first().and_then(Json::as_str);
     if arr.len() <= 1 {
-        // `["all"]`/`["foo"]` -> true, `["any"]` -> false.
+        // `[]`/`["all"]`/`["foo"]` -> true, `["any"]` -> false.
         return Ok(json!(op != Some("any")));
     }
 
@@ -319,6 +342,17 @@ fn convert(filter: &Json, expected: &mut ExpectedTypes) -> Result<Json, FilterEr
             let mut types = ExpectedTypes::new();
             let inner = convert(&Json::Array(any), &mut types)?;
             Ok(json!(["!", inner]))
+        }
+        // `!` and `case` are not legacy operators: we only get here when
+        // `has_convertible_legacy_leaf` found a legacy leaf beneath one. Keep
+        // the expression intact and rewrite just the descended slots, so the
+        // leaf actually reads the property instead of comparing two literals.
+        Some("!" | "case") => {
+            let mut out = arr.to_vec();
+            for i in descendable_slots(arr).unwrap_or_default() {
+                out[i] = convert(&arr[i], expected)?;
+            }
+            Ok(Json::Array(out))
         }
         Some("in") => convert_in_op(&arr[1], &arr[2..], false),
         Some("!in") => convert_in_op(&arr[1], &arr[2..], true),
@@ -456,11 +490,25 @@ fn sort_and_dedupe(values: &[Json]) -> Vec<Json> {
     sorted.sort_by_cached_key(js_string);
     let mut unique: Vec<Json> = Vec::with_capacity(sorted.len());
     for v in sorted {
-        if unique.last() != Some(&v) {
+        if !unique.last().is_some_and(|last| js_strict_eq(last, &v)) {
             unique.push(v);
         }
     }
     unique
+}
+
+/// JS `===`. Only the numeric case differs from serde_json's `PartialEq`:
+/// `1 === 1.0` in JS, whereas `Number(1)` and `Number(1.0)` are distinct
+/// `serde_json::Value`s. Upstream dedupes `in` values with `!==`, so without
+/// this a literal `["in", "a", 1, 1.0]` would emit a `match` with two labels
+/// for the same number.
+fn js_strict_eq(a: &Json, b: &Json) -> bool {
+    match (a, b) {
+        // NaN is never `===` itself; `as_f64` on a non-finite JSON number
+        // cannot occur, so plain float equality reproduces JS exactly.
+        (Json::Number(x), Json::Number(y)) => x.as_f64() == y.as_f64(),
+        _ => a == b,
+    }
 }
 
 /// The JS `String(v)` form used as the default sort key.
@@ -487,7 +535,7 @@ fn js_string(v: &Json) -> String {
 /// This convenience mirrors MapLibre's `createFilter` compile step:
 /// [`is_expression_filter`] classifies the input, [`convert_legacy_filter`]
 /// rewrites legacy leaves in place (including inside mixed
-/// `all`/`any`/`none` combiners), and the result is handed to
+/// `all`/`any`/`none`/`!`/`case` combiners), and the result is handed to
 /// [`parse`](crate::parse). A filter that is already a modern expression is
 /// parsed unchanged.
 ///
