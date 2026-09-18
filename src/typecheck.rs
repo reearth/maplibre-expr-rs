@@ -37,15 +37,46 @@ pub fn typecheck(
     Ok(annotated)
 }
 
-/// Evaluate the largest constant sub-expressions at compile time; a runtime
-/// error in one becomes a compile error, matching MapLibre's constant folding.
+/// Evaluate constant sub-expressions at compile time; a runtime error in one
+/// becomes a compile error.
+///
+/// This walk is **top-down, largest-constant-first**: it descends only until it
+/// meets a node that is constant as a whole, evaluates that node, and stops.
+///
+/// MapLibre folds **bottom-up instead**: `ParsingContext._parse`
+/// (`parsing_context.ts:157-172` at `ef522e45`) tests every node it has just
+/// parsed and replaces each constant one with a literal on the way back up, so
+/// *every* constant sub-expression is evaluated regardless of whether an
+/// enclosing node also folds.
+///
+/// The two agree whenever the outer fold succeeds for the same reason the inner
+/// one would. They differ when an enclosing constant node folds successfully
+/// while containing a sub-expression that would itself have failed — typically
+/// an unreachable branch:
+///
+/// ```text
+/// ["case", ["==", 1, 1], 1, ["at", 5, ["literal", [1]]]]
+///   here     -> Number(1.0)   (the whole `case` folds first; the bad `at` is never reached)
+///   upstream -> compile error "Array index out of bounds: 5 > 0." at key [3]
+/// ```
+///
+/// (`match`, `coalesce` and `step` show the same shape; `["at", 5, ["literal",
+/// [1]]]` on its own *is* rejected here.) The cause is structural: this crate
+/// splits parsing and type-checking into two passes, so folding runs as a walk
+/// over an already-built tree rather than as a step inside parsing. Matching
+/// upstream would mean folding during `infer_node` on the way back up.
+///
+/// That realignment is a deliberate **open question**, not a settled decision:
+/// the divergence only widens the set of styles this crate accepts (it never
+/// rejects something upstream accepts), and it is recorded here so the trade-off
+/// between parity and the two-pass design can be weighed later.
 fn check_constant_errors(expr: &Expr) -> Result<(), ParseError> {
     if is_constant(expr) {
         match crate::eval::eval(expr, &crate::context::EvaluationContext::default()) {
             Ok(_) => Ok(()),
             // An unimplemented/custom operator (e.g. an expression function) can't be
             // folded here; check its children instead of failing.
-            Err(e) if matches!(e.kind, crate::error::EvalErrorKind::Unimplemented { .. }) => {
+            Err(e) if is_unimplemented(&e) => {
                 for child in children(expr) {
                     check_constant_errors(child)?;
                 }
@@ -59,6 +90,14 @@ fn check_constant_errors(expr: &Expr) -> Result<(), ParseError> {
         }
         Ok(())
     }
+}
+
+/// Whether an evaluation failure means "this operator has no implementation to
+/// fold with" rather than "this expression is wrong". Both constant-folding
+/// sites ([`check_constant_errors`] and [`fold_constant`]) ask through here, so
+/// the question is decided one way — on the error kind, never on its wording.
+fn is_unimplemented(e: &crate::error::EvalError) -> bool {
+    matches!(e.kind, crate::error::EvalErrorKind::Unimplemented { .. })
 }
 
 /// Whether an expression is independent of the feature, zoom, and other runtime
@@ -231,7 +270,9 @@ impl Checker {
         let mut new_bindings = Vec::with_capacity(bindings.len());
         // Positions: op[0], name0[1], val0[2], name1[3], val1[4], ..., body[2n+1].
         for (k, (name, value)) in bindings.iter().enumerate() {
-            if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            // `let.ts:45` rejects on /[^a-zA-Z0-9_]/ — ASCII, so `is_ascii_alphanumeric`
+            // (not `is_alphanumeric`, which would admit e.g. "café" or "日本").
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                 self.scope.truncate(base);
                 return Err(ParseError::of(ParseErrorKind::VariableName).at(1 + 2 * k));
             }
@@ -403,7 +444,11 @@ impl Checker {
         Ok(match op {
             "==" | "!=" | "<" | ">" | "<=" | ">=" => return self.infer_comparison(op, args),
 
-            "!" | "all" | "any" | "has" | "within" | "is-supported-script" => {
+            // `within` and `distance` are not handled here: `parse` lowers them to
+            // `Expr::Within` / `Expr::Distance` (see `infer_node`), and `eval` only
+            // knows those forms. Arms for them as `Expr::Call` were unreachable and
+            // claimed a type `eval` would refuse to produce.
+            "!" | "all" | "any" | "has" | "is-supported-script" => {
                 mk(self.infer_args(args)?, Type::Boolean)
             }
             "in" => {
@@ -451,8 +496,7 @@ impl Checker {
             | "raster-value"
             | "measure-light"
             | "elevation"
-            | "accumulated"
-            | "distance" => mk(self.infer_args(args)?, Type::Number),
+            | "accumulated" => mk(self.infer_args(args)?, Type::Number),
 
             "length" => {
                 let (node, t) = self.infer(&args[0], None)?;
@@ -475,10 +519,12 @@ impl Checker {
             "split" => mk(self.infer_args(args)?, Type::array(Type::String, None)),
 
             "at" => {
-                let (idx, _) = self.infer_at(&args[0], None, 1)?;
-                // Propagate the expected element type down: `at` into an
-                // `array<expected>`, so a type-mismatch is reported against the
-                // array argument (MapLibre's behaviour).
+                // `at.ts:25` parses the index against `NumberType` at key [1].
+                let (idx, _) = self.infer_at(&args[0], Some(&Type::Number), 1)?;
+                // `at.ts:26`: the array argument is parsed against
+                // `array(context.expectedType || ValueType)`, so the expected
+                // element type propagates down and a type mismatch is reported
+                // against the array argument.
                 let arr_expected = concrete(expected).map(|t| Type::array(t, None));
                 let (arr, arr_ty) = self.infer_at(&args[1], arr_expected.as_ref(), 2)?;
                 let item = match arr_ty {
@@ -677,32 +723,20 @@ impl Checker {
         ))
     }
 
-    /// Infer with the argument-annotation omitted: assert/coerce mismatches are
-    /// tolerated (the value stays raw), but a plain subtype violation errors.
+    /// Infer with the argument-annotation omitted — upstream's
+    /// `typeAnnotation: 'omit'` mode, used only by `coalesce`.
+    ///
+    /// The branch is chosen by the same [`annotation_for`] table `reconcile`
+    /// uses; in `'omit'` mode both the assert and the coerce branch return the
+    /// node exactly as parsed, with *no* subtype check. Only a pair that falls
+    /// through to the plain-subtype branch can fail. That is what lets
+    /// `["coalesce", ["get", "c"], "red"]` stand where a color is expected.
     fn infer_omit(&mut self, expr: &Expr, expected: Option<&Type>) -> R {
         let (node, actual) = self.infer_node(expr, expected)?;
         let Some(exp) = expected else {
             return Ok((node, actual));
         };
-        let assertable = matches!(
-            exp,
-            Type::String | Type::Number | Type::Boolean | Type::Object | Type::Array(..)
-        );
-        let coercible = matches!(
-            exp,
-            Type::Color
-                | Type::Formatted
-                | Type::ResolvedImage
-                | Type::Padding
-                | Type::NumberArray
-                | Type::ColorArray
-                | Type::ProjectionDefinition
-                | Type::VariableAnchorOffsetCollection
-        );
-        if (assertable || coercible) && matches!(actual, Type::Value) {
-            return Ok((node, actual));
-        }
-        if !is_subtype(exp, &actual) {
+        if annotation_for(exp, &actual) == Annotation::Subtype && !is_subtype(exp, &actual) {
             return Err(ParseError::of(ParseErrorKind::TypeMismatch {
                 expected: exp.to_string(),
                 found: actual.to_string(),
@@ -790,21 +824,38 @@ fn wrap(ty: Type, inner: Expr, coerce: bool) -> Expr {
     }
 }
 
-/// Reconcile an inferred `actual` type against an `expected` one, inserting an
-/// assertion or coercion node as MapLibre's `ParsingContext` would.
-fn reconcile(node: Expr, actual: Type, expected: Option<&Type>, coerce_string: bool) -> R {
-    let Some(exp) = expected else {
-        return Ok((node, actual));
-    };
+/// Which branch of MapLibre's expected-vs-actual table an inferred type takes.
+///
+/// Mirrors the three-way `if / else if / else` in `ParsingContext._parse`
+/// (`parsing_context.ts:120-153` at `ef522e45`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Annotation {
+    /// A `value` flowing into a concrete assertable type.
+    Assert,
+    /// A type the expected one knows how to coerce from.
+    Coerce,
+    /// Neither: the pair must pass a plain subtype check.
+    Subtype,
+}
+
+/// The single source of truth for that table.
+///
+/// Upstream's annotation *mode* is per-call-site (`'assert' | 'coerce' | 'omit'`)
+/// but the table that selects the branch is shared, so it lives here exactly
+/// once: [`reconcile`] applies the result in `'assert'`/`'coerce'` mode (it
+/// inserts an [`Expr::Assert`] / [`Expr::Coerce`] node), while
+/// [`Checker::infer_omit`] applies it in `'omit'` mode (both annotating branches
+/// return the node untouched and skip the subtype check). Only the mode differs;
+/// keeping one table prevents the two call sites from drifting apart.
+fn annotation_for(expected: &Type, actual: &Type) -> Annotation {
     let assertable = matches!(
-        exp,
+        expected,
         Type::String | Type::Number | Type::Boolean | Type::Object | Type::Array(..)
     );
     if assertable && matches!(actual, Type::Value) {
-        let coerce = coerce_string && matches!(exp, Type::String);
-        return Ok((fold_constant(wrap(exp.clone(), node, coerce))?, exp.clone()));
+        return Annotation::Assert;
     }
-    let coerce = match exp {
+    let coerce = match expected {
         Type::ProjectionDefinition => matches!(actual, Type::String | Type::Array(..)),
         Type::Color | Type::Formatted | Type::ResolvedImage => {
             matches!(actual, Type::Value | Type::String)
@@ -817,15 +868,36 @@ fn reconcile(node: Expr, actual: Type, expected: Option<&Type>, coerce_string: b
         _ => false,
     };
     if coerce {
-        return Ok((fold_constant(wrap(exp.clone(), node, true))?, exp.clone()));
+        Annotation::Coerce
+    } else {
+        Annotation::Subtype
     }
-    if !is_subtype(exp, &actual) {
-        return Err(ParseError::of(ParseErrorKind::TypeMismatch {
-            expected: exp.to_string(),
-            found: actual.to_string(),
-        }));
+}
+
+/// Reconcile an inferred `actual` type against an `expected` one, inserting an
+/// assertion or coercion node as MapLibre's `ParsingContext` would.
+fn reconcile(node: Expr, actual: Type, expected: Option<&Type>, coerce_string: bool) -> R {
+    let Some(exp) = expected else {
+        return Ok((node, actual));
+    };
+    match annotation_for(exp, &actual) {
+        Annotation::Assert => {
+            // `coerce_top_string` is upstream's per-call `typeAnnotation: 'coerce'`
+            // override for string-valued properties (e.g. `text-field`).
+            let coerce = coerce_string && matches!(exp, Type::String);
+            Ok((fold_constant(wrap(exp.clone(), node, coerce))?, exp.clone()))
+        }
+        Annotation::Coerce => Ok((fold_constant(wrap(exp.clone(), node, true))?, exp.clone())),
+        Annotation::Subtype => {
+            if !is_subtype(exp, &actual) {
+                return Err(ParseError::of(ParseErrorKind::TypeMismatch {
+                    expected: exp.to_string(),
+                    found: actual.to_string(),
+                }));
+            }
+            Ok((node, actual))
+        }
     }
-    Ok((node, actual))
 }
 
 /// Eagerly evaluate a just-wrapped constant coercion/assertion so a bad literal
@@ -835,9 +907,8 @@ fn reconcile(node: Expr, actual: Type, expected: Option<&Type>, coerce_string: b
 fn fold_constant(node: Expr) -> Result<Expr, ParseError> {
     if is_constant(&node) {
         if let Err(e) = crate::eval::eval(&node, &crate::context::EvaluationContext::default()) {
-            let msg = e.to_string();
-            if !msg.starts_with("Unimplemented operator") {
-                return Err(ParseError::new(msg));
+            if !is_unimplemented(&e) {
+                return Err(ParseError::new(e.to_string()));
             }
         }
     }
@@ -889,7 +960,15 @@ fn validate_match_labels(arms: &[(Vec<Value>, Expr)]) -> Result<Option<Type>, Pa
                     .at(pos))
                 }
             }
-            let key = format!("{label:?}");
+            // Upstream keys the seen-set by `String(label)` (`match.ts:85-90`),
+            // under which `-0` and `0` are the same key. Rust's `Debug` keeps
+            // them apart, so normalize the sign of zero (`-0.0 + 0.0 == 0.0`) —
+            // otherwise a `-0` arm would compile and then be unreachable,
+            // because evaluation's `values_equal` treats the two as equal.
+            let key = match label {
+                Value::Number(n) => format!("{:?}", n + 0.0),
+                other => format!("{other:?}"),
+            };
             if seen.contains(&key) {
                 return Err(ParseError::of(ParseErrorKind::BranchLabelsUnique).at(pos));
             }
@@ -1081,4 +1160,193 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::EvaluationContext;
+    use serde_json::json;
+
+    /// Parse + type-check against `expected`, mirroring what a property of that
+    /// type does to a style value.
+    fn check(expr: serde_json::Value, expected: Option<Type>) -> Result<Expr, ParseError> {
+        let parsed = crate::parse::parse(&expr, &crate::Options::default())?;
+        typecheck(&parsed, expected.as_ref(), false)
+    }
+
+    fn eval_ok(expr: serde_json::Value, expected: Option<Type>) -> Value {
+        let node = check(expr, expected).expect("should compile");
+        crate::eval::eval(&node, &EvaluationContext::default()).expect("should evaluate")
+    }
+
+    // ---- B3: `coalesce` parses its arguments with typeAnnotation 'omit' ----
+    //
+    // In 'omit' mode both the assert and the coerce branch of
+    // `parsing_context.ts:120-153` return the node untouched, so a concrete
+    // coercible type (not just `value`) is accepted. Every case below is
+    // accepted by maplibre-style-spec at ef522e45.
+
+    #[test]
+    fn coalesce_omits_coercion_for_a_literal_color_string() {
+        assert!(check(json!(["coalesce", "red"]), Some(Type::Color)).is_ok());
+    }
+
+    #[test]
+    fn coalesce_omits_coercion_for_a_trailing_color_string() {
+        // The common style idiom: fall back to a literal color.
+        assert!(check(json!(["coalesce", ["get", "a"], "red"]), Some(Type::Color)).is_ok());
+    }
+
+    #[test]
+    fn coalesce_omits_coercion_for_padding_number_and_number_array() {
+        assert!(check(json!(["coalesce", ["get", "a"], 1]), Some(Type::Padding)).is_ok());
+        assert!(check(
+            json!(["coalesce", ["get", "a"], ["literal", [1, 2]]]),
+            Some(Type::NumberArray)
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn coalesce_omits_coercion_for_formatted_image_and_color_array() {
+        assert!(check(
+            json!(["coalesce", ["get", "a"], "x"]),
+            Some(Type::Formatted)
+        )
+        .is_ok());
+        assert!(check(
+            json!(["coalesce", ["get", "a"], "x"]),
+            Some(Type::ResolvedImage)
+        )
+        .is_ok());
+        assert!(check(
+            json!(["coalesce", ["get", "a"], ["literal", ["red"]]]),
+            Some(Type::ColorArray)
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn coalesce_into_projection_definition_still_fails_as_upstream_does() {
+        // Not a `coalesce` quirk: the arguments are accepted in 'omit' mode, but
+        // `needsAnnotation` then types the whole `coalesce` as `value`, and
+        // `projectionDefinition` coerces only from `string`/`array` — never from
+        // `value`. Upstream reports the identical message at the identical key.
+        let e = check(
+            json!(["coalesce", "mercator"]),
+            Some(Type::ProjectionDefinition),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "Expected projectionDefinition but found value instead."
+        );
+        assert_eq!(e.key, "");
+    }
+
+    #[test]
+    fn coalesce_still_rejects_a_plain_subtype_violation() {
+        // `number` is not coercible to `boolean`, so the fall-through branch
+        // of the shared table applies in 'omit' mode too.
+        let e = check(json!(["coalesce", 1]), Some(Type::Boolean)).unwrap_err();
+        assert_eq!(e.to_string(), "Expected boolean but found number instead.");
+        assert_eq!(e.key, "[1]");
+    }
+
+    #[test]
+    fn concat_control_case_still_coerces_a_color_string() {
+        // The `reconcile` (non-omit) side of the same table is unchanged.
+        assert_eq!(
+            eval_ok(json!(["concat", "red"]), Some(Type::Color)),
+            Value::Color(crate::color::Color::new(1.0, 0.0, 0.0, 1.0))
+        );
+    }
+
+    // ---- C17: `let` binding names are ASCII-only (`let.ts:45`) ----
+
+    #[test]
+    fn let_rejects_non_ascii_binding_names() {
+        for name in ["日本", "café"] {
+            let e = check(json!(["let", name, 1, ["var", name]]), None).unwrap_err();
+            assert!(matches!(e.kind, ParseErrorKind::VariableName));
+            assert_eq!(e.key, "[1]");
+        }
+    }
+
+    #[test]
+    fn let_still_rejects_ascii_punctuation_at_the_name_key() {
+        for name in ["$a", "a-b", "a b"] {
+            let e = check(json!(["let", name, 1, ["var", name]]), None).unwrap_err();
+            assert!(matches!(e.kind, ParseErrorKind::VariableName));
+            assert_eq!(e.key, "[1]");
+        }
+    }
+
+    #[test]
+    fn let_still_accepts_ascii_alphanumeric_names() {
+        assert_eq!(
+            eval_ok(json!(["let", "a_1", 1, ["var", "a_1"]]), None),
+            Value::Number(1.0)
+        );
+    }
+
+    // ---- C18: `at` parses its index against number at key [1] (`at.ts:25`) ----
+
+    #[test]
+    fn at_reports_a_non_number_index_at_key_one() {
+        let e = check(json!(["at", "0", ["literal", [1]]]), None).unwrap_err();
+        assert_eq!(e.to_string(), "Expected number but found string instead.");
+        assert_eq!(e.key, "[1]");
+    }
+
+    #[test]
+    fn at_still_accepts_a_value_typed_index() {
+        // A `value`-typed index takes the assert branch, as upstream does.
+        assert!(check(json!(["at", ["get", "i"], ["literal", [1]]]), None).is_ok());
+    }
+
+    // ---- D9: `within` / `distance` are never `Expr::Call` ----
+
+    #[test]
+    fn within_and_distance_lower_to_their_own_nodes() {
+        let w = crate::parse::parse(
+            &json!(["within", {"type": "Polygon", "coordinates": [[[0,0],[1,0],[1,1],[0,0]]]}]),
+            &crate::Options::default(),
+        )
+        .expect("within parses");
+        assert!(matches!(w, Expr::Within(_)));
+        let d = crate::parse::parse(
+            &json!(["distance", {"type": "Point", "coordinates": [0, 0]}]),
+            &crate::Options::default(),
+        )
+        .expect("distance parses");
+        assert!(matches!(d, Expr::Distance(_)));
+    }
+
+    // ---- `match` label uniqueness follows JS `String(label)` ----
+
+    #[test]
+    fn match_rejects_negative_zero_as_a_duplicate_of_zero() {
+        let e = check(json!(["match", ["get", "x"], 0, "a", -0.0, "b", "d"]), None).unwrap_err();
+        assert!(matches!(e.kind, ParseErrorKind::BranchLabelsUnique));
+        assert_eq!(e.key, "[4]");
+    }
+
+    // ---- B8: the documented top-down folding behaviour ----
+
+    #[test]
+    fn constant_folding_is_top_down_and_misses_unreachable_branches() {
+        // The divergence from upstream's bottom-up fold documented on
+        // `check_constant_errors`.
+        assert_eq!(
+            eval_ok(
+                json!(["case", ["==", 1, 1], 1, ["at", 5, ["literal", [1]]]]),
+                None
+            ),
+            Value::Number(1.0)
+        );
+        // The same sub-expression on its own is still rejected.
+        assert!(check(json!(["at", 5, ["literal", [1]]]), None).is_err());
+    }
 }

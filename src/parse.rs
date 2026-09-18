@@ -164,15 +164,17 @@ fn parse_array(items: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
 
     match op {
         "literal" => {
-            expect_arity(op, args, 1)?;
+            expect_one_arg(op, args)?;
             Ok(Expr::Literal(Value::from_json(&args[0])))
         }
         "let" => parse_let(args, ctx),
         "var" => {
-            expect_arity(op, args, 1)?;
-            let name = args[0]
-                .as_str()
-                .ok_or_else(|| ParseError::of(ParseErrorKind::VarBindingName))?;
+            // One guard upstream, not two (`var.ts:18-21`): a wrong count and
+            // a non-string name are the same error.
+            let name = match args {
+                [Json::String(name)] => name,
+                _ => return Err(ParseError::of(ParseErrorKind::VarOneStringLiteral)),
+            };
             Ok(Expr::Var(name.to_string()))
         }
         "match" => parse_match(args, ctx),
@@ -256,23 +258,144 @@ fn js_typeof(v: &Json) -> &'static str {
     }
 }
 
-/// A few operators are `CompoundExpression`s in MapLibre: a wrong argument
-/// count is reported against their typed overload signatures rather than a
-/// plain count. Returns the signature-form error when `op` is one of them and
-/// its arity is wrong (types are inferred coarsely from literal arguments).
+/// One typed overload of a `CompoundExpression`: its parameter count (`None`
+/// for varargs, which accept any count) and the signature as MapLibre's
+/// `stringifySignature` renders it.
+type Overload = (Option<usize>, &'static str);
+
+/// MapLibre's `CompoundExpression` registry, transcribed from
+/// `src/expression/compound_expression.ts` (`CompoundExpression.register`,
+/// lines 218–535 of the pinned commit).
+///
+/// These operators are not special forms: MapLibre resolves them by matching
+/// the call against a list of typed overloads, and reports a wrong argument
+/// count against *the signatures*, not as a count (see
+/// [`signature_arity_error`]). Having the whole registry here — rather than the
+/// handful of operators that happened to have fixtures — is what makes that
+/// message come out for every one of them, as it does upstream.
+///
+/// The remaining operators (the "special forms" of
+/// `src/expression/definitions/index.ts`) have hand-written parsers and their
+/// own messages; their argument counts live in [`arity`].
+const COMPOUND_EXPRESSIONS: &[(&str, &[Overload])] = &[
+    // --- lookups and feature/global properties -----------------------------
+    ("error", &[(Some(1), "(string)")]),
+    ("typeof", &[(Some(1), "(value)")]),
+    ("to-rgba", &[(Some(1), "(color)")]),
+    ("rgb", &[(Some(3), "(number, number, number)")]),
+    ("rgba", &[(Some(4), "(number, number, number, number)")]),
+    (
+        "has",
+        &[(Some(1), "(string)"), (Some(2), "(string, object)")],
+    ),
+    (
+        "get",
+        &[(Some(1), "(string)"), (Some(2), "(string, object)")],
+    ),
+    ("feature-state", &[(Some(1), "(string)")]),
+    ("properties", &[(Some(0), "()")]),
+    ("geometry-type", &[(Some(0), "()")]),
+    ("id", &[(Some(0), "()")]),
+    ("zoom", &[(Some(0), "()")]),
+    ("heatmap-density", &[(Some(0), "()")]),
+    ("elevation", &[(Some(0), "()")]),
+    ("line-progress", &[(Some(0), "()")]),
+    ("accumulated", &[(Some(0), "()")]),
+    // --- arithmetic --------------------------------------------------------
+    ("+", &[(None, "(number...)")]),
+    ("*", &[(None, "(number...)")]),
+    ("-", &[(Some(2), "(number, number)"), (Some(1), "(number)")]),
+    ("/", &[(Some(2), "(number, number)")]),
+    ("%", &[(Some(2), "(number, number)")]),
+    ("ln2", &[(Some(0), "()")]),
+    ("pi", &[(Some(0), "()")]),
+    ("e", &[(Some(0), "()")]),
+    ("^", &[(Some(2), "(number, number)")]),
+    ("sqrt", &[(Some(1), "(number)")]),
+    ("log10", &[(Some(1), "(number)")]),
+    ("ln", &[(Some(1), "(number)")]),
+    ("log2", &[(Some(1), "(number)")]),
+    ("sin", &[(Some(1), "(number)")]),
+    ("cos", &[(Some(1), "(number)")]),
+    ("tan", &[(Some(1), "(number)")]),
+    ("asin", &[(Some(1), "(number)")]),
+    ("acos", &[(Some(1), "(number)")]),
+    ("atan", &[(Some(1), "(number)")]),
+    ("min", &[(None, "(number...)")]),
+    ("max", &[(None, "(number...)")]),
+    ("abs", &[(Some(1), "(number)")]),
+    ("round", &[(Some(1), "(number)")]),
+    ("floor", &[(Some(1), "(number)")]),
+    ("ceil", &[(Some(1), "(number)")]),
+    // --- the internal `filter-*` family MapLibre compiles legacy filters into
+    ("filter-==", &[(Some(2), "(string, value)")]),
+    ("filter-id-==", &[(Some(1), "(value)")]),
+    ("filter-type-==", &[(Some(1), "(string)")]),
+    ("filter-<", &[(Some(2), "(string, value)")]),
+    ("filter-id-<", &[(Some(1), "(value)")]),
+    ("filter->", &[(Some(2), "(string, value)")]),
+    ("filter-id->", &[(Some(1), "(value)")]),
+    ("filter-<=", &[(Some(2), "(string, value)")]),
+    ("filter-id-<=", &[(Some(1), "(value)")]),
+    ("filter->=", &[(Some(2), "(string, value)")]),
+    ("filter-id->=", &[(Some(1), "(value)")]),
+    ("filter-has", &[(Some(1), "(value)")]),
+    ("filter-has-id", &[(Some(0), "()")]),
+    ("filter-type-in", &[(Some(1), "(array<string>)")]),
+    ("filter-id-in", &[(Some(1), "(array)")]),
+    ("filter-in-small", &[(Some(2), "(string, array)")]),
+    ("filter-in-large", &[(Some(2), "(string, array)")]),
+    // --- booleans and strings ----------------------------------------------
+    (
+        "all",
+        &[(Some(2), "(boolean, boolean)"), (None, "(boolean...)")],
+    ),
+    (
+        "any",
+        &[(Some(2), "(boolean, boolean)"), (None, "(boolean...)")],
+    ),
+    ("!", &[(Some(1), "(boolean)")]),
+    ("is-supported-script", &[(Some(1), "(string)")]),
+    ("upcase", &[(Some(1), "(string)")]),
+    ("downcase", &[(Some(1), "(string)")]),
+    ("concat", &[(None, "(value...)")]),
+    ("split", &[(Some(2), "(string, string)")]),
+    ("join", &[(Some(2), "(array<string>, string)")]),
+    ("resolved-locale", &[(Some(1), "(collator)")]),
+];
+
+/// The typed overloads of `op`, if it is a `CompoundExpression`.
+fn compound_overloads(op: &str) -> Option<&'static [Overload]> {
+    COMPOUND_EXPRESSIONS
+        .iter()
+        .find(|(name, _)| *name == op)
+        .map(|(_, overloads)| *overloads)
+}
+
+/// A `CompoundExpression` whose argument count matches none of its overloads is
+/// reported against the signatures rather than as a count
+/// (`compound_expression.ts:154-172`: the count filter empties `overloads`, so
+/// `overloads.length === 1` is false and the signature form is printed).
+///
+/// The argument *types* are the one place this is an approximation. Upstream
+/// re-parses each argument and prints `typeToString(parsed.type)`; this crate
+/// splits parsing from type inference into two passes (`parse` then
+/// `typecheck`), and no type exists yet at the point this error is raised — so
+/// types are inferred coarsely, as the raw JSON's JavaScript `typeof`. The two
+/// agree for numbers, strings and booleans; they differ for sub-expressions and
+/// literal arrays, which read here as `object`.
 fn signature_arity_error(op: &str, args: &[Json]) -> Option<ParseError> {
-    let (sig, ok) = match op {
-        "e" | "pi" | "ln2" => ("()", args.is_empty()),
-        "typeof" => ("(value)", args.len() == 1),
-        "-" => ("(number, number) | (number)", (1..=2).contains(&args.len())),
-        _ => return None,
-    };
-    if ok {
+    let overloads = compound_overloads(op)?;
+    if overloads
+        .iter()
+        .any(|(params, _)| params.is_none_or(|n| n == args.len()))
+    {
         return None;
     }
+    let sigs: Vec<&str> = overloads.iter().map(|(_, sig)| *sig).collect();
     let found: Vec<&str> = args.iter().map(js_typeof).collect();
     Some(ParseError::of(ParseErrorKind::ExpectedArgsOfType {
-        sig: sig.to_string(),
+        sig: sigs.join(" | "),
         found: found.join(", "),
     }))
 }
@@ -280,13 +403,20 @@ fn signature_arity_error(op: &str, args: &[Json]) -> Option<ParseError> {
 /// Reject unknown operators and calls with the wrong number of arguments at
 /// parse time — these are `"result": "error"` cases in the spec fixtures.
 ///
-/// Operators that MapLibre defines but this crate does not yet evaluate are
-/// still accepted here (so their arguments parse); evaluation reports them as
-/// unimplemented. Only genuinely unknown names are rejected.
+/// Every name in MapLibre's expression registry is accepted here (so that its
+/// arguments parse and error keys line up) even when this crate has no
+/// evaluator for it — evaluation reports those as unimplemented. Only names
+/// outside the registry are rejected.
 fn check_generic_arity(op: &str, argc: usize) -> Result<()> {
-    // `case` has an irregular (odd, >= 3) shape.
+    // `case` has an irregular (odd, >= 3) shape (`case.ts:23-28`).
     if op == "case" {
-        if argc < 3 || argc.is_multiple_of(2) {
+        if argc < 3 {
+            return Err(ParseError::of(ParseErrorKind::ExpectedAtLeastArgs {
+                min: 3,
+                found: argc,
+            }));
+        }
+        if argc.is_multiple_of(2) {
             return Err(ParseError::of(ParseErrorKind::ExpectedOddArgsCase));
         }
         return Ok(());
@@ -298,22 +428,26 @@ fn check_generic_arity(op: &str, argc: usize) -> Result<()> {
     })?;
     let (min, max) = range;
     if argc < min || max.is_some_and(|m| argc > m) {
-        // `to-boolean` / `to-string` are single-argument coercions with their
-        // own wording.
-        if op == "to-boolean" || op == "to-string" {
-            return Err(ParseError::of(ParseErrorKind::ExpectedOneArgument));
-        }
         let plural = |n: usize| if n == 1 { "argument" } else { "arguments" };
-        let expected = match max {
-            Some(m) if m == min => format!("{min} {}", plural(min)),
-            Some(m) if m == min + 1 => format!("{min} or {m} arguments"),
-            Some(m) => format!("{min} to {m} arguments"),
-            None => format!("at least {min} arguments"),
-        };
-        return Err(ParseError::of(ParseErrorKind::WrongArgCount {
-            op: op.to_string(),
-            expected,
-            found: argc,
+        return Err(ParseError::of(match op {
+            // `to-boolean` / `to-string` are fixed single-argument coercions
+            // with their own wording (`coercion.ts:46-47`).
+            "to-boolean" | "to-string" => ParseErrorKind::ExpectedOneArgument,
+            // `image` is strictly two arguments (`image.ts:19-20`).
+            "image" => ParseErrorKind::ExpectedTwoArguments,
+            // The assertions and the remaining coercions state a floor and
+            // nothing else (`assertion.ts:36`, `coercion.ts:41`).
+            _ if max.is_none() => ParseErrorKind::ExpectedAtLeastOneArgument,
+            _ => ParseErrorKind::WrongArgCount {
+                op: op.to_string(),
+                expected: match max {
+                    Some(m) if m == min => format!("{min} {}", plural(min)),
+                    Some(m) if m == min + 1 => format!("{min} or {m} arguments"),
+                    Some(m) => format!("{min} to {m} arguments"),
+                    None => unreachable!("handled by the arm above"),
+                },
+                found: argc,
+            },
         }));
     }
     Ok(())
@@ -321,69 +455,59 @@ fn check_generic_arity(op: &str, argc: usize) -> Result<()> {
 
 /// `(min, max)` argument counts for each known operator; `None` max means
 /// variadic. Operators absent from this table are unknown names.
+///
+/// `CompoundExpression`s are not listed: their counts are derived from the
+/// typed overloads in [`COMPOUND_EXPRESSIONS`], so the two can never drift
+/// apart. What is written out below are the special forms of
+/// `src/expression/definitions/index.ts`.
 fn arity(op: &str) -> Option<(usize, Option<usize>)> {
+    if let Some(overloads) = compound_overloads(op) {
+        // A varargs overload accepts any count, so it sets the floor to 0 and
+        // removes the ceiling.
+        let min = overloads
+            .iter()
+            .map(|(params, _)| params.unwrap_or(0))
+            .min()
+            .unwrap_or(0);
+        let max = overloads
+            .iter()
+            .map(|(params, _)| *params)
+            .max()
+            .unwrap_or(None);
+        return Some((min, max));
+    }
     Some(match op {
         // lookups
-        "get" => (1, Some(2)),
-        "has" => (1, Some(2)),
-        "properties"
-        | "id"
-        | "geometry-type"
-        | "zoom"
-        | "heatmap-density"
-        | "line-progress"
-        | "accumulated"
-        | "e"
-        | "pi"
-        | "ln2"
-        | "raster-value"
-        | "sky-radial-progress"
-        | "measure-light"
-        | "elevation" => (0, Some(0)),
         "at" => (2, Some(2)),
         "in" => (2, Some(2)),
         "index-of" => (2, Some(3)),
         "slice" => (2, Some(3)),
         "length" => (1, Some(1)),
-        "feature-state" | "config" => (1, Some(2)),
         "global-state" => (1, Some(1)),
 
         // decision / boolean
-        "!" => (1, Some(1)),
-        "all" | "any" | "coalesce" => (0, None),
-        "error" => (1, Some(1)),
+        "coalesce" => (0, None),
         "==" | "!=" | "<" | ">" | "<=" | ">=" => (2, Some(3)),
 
-        // arithmetic — +/*/min/max accept zero args (identity element)
-        "+" | "*" | "min" | "max" => (0, None),
-        "-" => (1, Some(2)),
-        "/" | "%" | "^" => (2, Some(2)),
-        "abs" | "acos" | "asin" | "atan" | "ceil" | "cos" | "floor" | "ln" | "log10" | "log2"
-        | "round" | "sin" | "sqrt" | "tan" => (1, Some(1)),
-        "distance" => (1, Some(1)),
-
-        // strings
-        "concat" => (0, None),
-        "upcase" | "downcase" => (1, Some(1)),
-        "join" => (2, Some(2)),
-        "split" => (2, Some(2)),
-        "is-supported-script" => (1, Some(1)),
-        "resolved-locale" => (1, Some(1)),
+        // strings & formatting
         "number-format" => (2, Some(2)),
-        "format" | "image" => (1, None),
+        "format" => (1, None),
+        // `image` takes exactly one argument, the image name (`image.ts:19-20`
+        // tests `args.length !== 2`, and upstream's `args` includes the
+        // operator). It is not a variadic `format`-shaped section list — and
+        // note that its message says "two arguments", counting the operator,
+        // which is MapLibre's wording and is kept verbatim.
+        "image" => (1, Some(1)),
 
         // type assertions & conversions ("array" takes an optional item type
         // and length prefix, then one or more fallback value candidates)
         "array" => (1, None),
         "boolean" | "number" | "string" | "object" | "to-number" | "to-color" => (1, None),
-        "to-boolean" | "to-string" | "to-rgba" | "typeof" => (1, Some(1)),
-
-        // color constructors
-        "rgb" => (3, Some(3)),
-        "rgba" => (4, Some(4)),
+        "to-boolean" | "to-string" => (1, Some(1)),
 
         // geometry predicates
         "within" => (1, Some(1)),
+        "distance" => (1, Some(1)),
 
         _ => return None,
     })
@@ -417,16 +541,28 @@ pub(crate) fn is_operator(op: &str) -> bool {
     ) || arity(op).is_some()
 }
 
+/// Parse `["let", name, value, …, body]`.
+///
+/// Upstream (`let.ts:28-49`) gates on a *minimum* count, not on parity: with an
+/// even number of arguments the last value doubles as the body, which is
+/// accepted. What is rejected is fewer than three arguments — in particular a
+/// `let` with no binding at all.
 fn parse_let(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
-    if args.is_empty() || args.len().is_multiple_of(2) {
-        return Err(ParseError::of(ParseErrorKind::ExpectedOddArgsLet));
+    if args.len() < 3 {
+        return Err(ParseError::of(ParseErrorKind::LetAtLeast3 {
+            found: args.len(),
+        }));
     }
     let mut bindings = Vec::new();
     let mut i = 0;
     while i + 1 < args.len() {
-        let name = args[i]
-            .as_str()
-            .ok_or_else(|| ParseError::of(ParseErrorKind::LetBindingNameString))?;
+        // The binding name is at position [i + 1] in the original array.
+        let name = args[i].as_str().ok_or_else(|| {
+            ParseError::of(ParseErrorKind::ExpectedString {
+                found: js_typeof(&args[i]),
+            })
+            .at(i + 1)
+        })?;
         bindings.push((name.to_string(), parse_expr(&args[i + 1], ctx)?));
         i += 2;
     }
@@ -440,14 +576,13 @@ fn parse_let(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
 fn parse_match(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     // args = input, (label, output)+, default  =>  even count, >= 4.
     if args.len() < 4 {
-        return Err(ParseError::of(ParseErrorKind::MatchAtLeast4 {
+        return Err(ParseError::of(ParseErrorKind::ExpectedAtLeastArgs {
+            min: 4,
             found: args.len(),
         }));
     }
     if !args.len().is_multiple_of(2) {
-        return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs {
-            op: "match",
-        }));
+        return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs));
     }
     // Positions: op[0], input[1], label0[2], out0[3], ..., default[len].
     let input = parse_expr(&args[0], ctx).map_err(|e| e.at(1))?;
@@ -477,10 +612,15 @@ fn parse_match_labels(json: &Json) -> Result<Vec<Value>> {
 }
 
 fn parse_step(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
-    if args.len() < 3 || args.len() % 2 == 1 {
-        return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs {
-            op: "step",
+    // `step.ts:31-39` — a floor first, then parity, as two distinct messages.
+    if args.len() < 4 {
+        return Err(ParseError::of(ParseErrorKind::ExpectedAtLeastArgs {
+            min: 4,
+            found: args.len(),
         }));
+    }
+    if !args.len().is_multiple_of(2) {
+        return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs));
     }
     // Positions: op[0], input[1], output0[2], stop[3], output[4], ...
     let input = parse_expr(&args[0], ctx).map_err(|e| e.at(1))?;
@@ -488,9 +628,13 @@ fn parse_step(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     let mut stops = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
-        let stop = args[i]
-            .as_f64()
-            .ok_or_else(|| ParseError::of(ParseErrorKind::StepStopNumber))?;
+        // The offending stop input is at position [i + 1] (`step.ts:56-62`).
+        let stop = args[i].as_f64().ok_or_else(|| {
+            ParseError::of(ParseErrorKind::StopInputLiteral {
+                kind: "step".to_string(),
+            })
+            .at(i + 1)
+        })?;
         stops.push((
             stop,
             parse_expr(&args[i + 1], ctx).map_err(|e| e.at(i + 2))?,
@@ -506,20 +650,33 @@ fn parse_step(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
 }
 
 fn parse_interpolate(space: InterpSpace, args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
-    if args.len() < 4 || args.len() % 2 == 1 {
-        return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs {
-            op: "interpolate",
+    // Positions: op[0], kind[1], input[2], stop[3], output[4], ...
+    //
+    // Upstream validates the interpolation type *before* the argument count
+    // (`interpolate.ts:108-158`), so `["interpolate", "linear", 1]` reports the
+    // type, not the count. A missing type slot reads as a non-array.
+    let kind = parse_interp_kind(args.first().unwrap_or(&Json::Null)).map_err(|e| e.at(1))?;
+    if args.len() < 4 {
+        return Err(ParseError::of(ParseErrorKind::ExpectedAtLeastArgs {
+            min: 4,
+            found: args.len(),
         }));
     }
-    // Positions: op[0], kind[1], input[2], stop[3], output[4], ...
-    let kind = parse_interp_kind(&args[0]).map_err(|e| e.at(1))?;
+    if !args.len().is_multiple_of(2) {
+        return Err(ParseError::of(ParseErrorKind::ExpectedEvenArgs));
+    }
     let input = parse_expr(&args[1], ctx).map_err(|e| e.at(2))?;
     let mut stops = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
-        let stop = args[i]
-            .as_f64()
-            .ok_or_else(|| ParseError::of(ParseErrorKind::InterpolationStopNumber))?;
+        // The offending stop input is at position [i + 1]
+        // (`interpolate.ts:175-190`, `labelKey = i + 3` over `rest`).
+        let stop = args[i].as_f64().ok_or_else(|| {
+            ParseError::of(ParseErrorKind::StopInputLiteral {
+                kind: "interpolate".to_string(),
+            })
+            .at(i + 1)
+        })?;
         stops.push((
             stop,
             parse_expr(&args[i + 1], ctx).map_err(|e| e.at(i + 2))?,
@@ -536,11 +693,11 @@ fn parse_interpolate(space: InterpSpace, args: &[Json], ctx: &Ctx<'_>) -> Result
     })
 }
 
-/// Parse `["within", geojson]`, extracting polygon rings (as `[lng, lat]`)
-/// from a Polygon, MultiPolygon, Feature, or FeatureCollection.
+/// Parse `["collator", options]`, where `options` is an object of
+/// `case-sensitive`, `diacritic-sensitive` and `locale` sub-expressions.
 fn parse_collator(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.len() != 1 {
-        return Err(ParseError::of(ParseErrorKind::CollatorOneArg));
+        return Err(ParseError::of(ParseErrorKind::ExpectedOneArgument));
     }
     let obj = args[0]
         .as_object()
@@ -558,9 +715,10 @@ fn parse_collator(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     })
 }
 
+/// Parse `["number-format", value, options]`.
 fn parse_number_format(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.len() != 2 {
-        return Err(ParseError::of(ParseErrorKind::NumberFormatTwoArgs));
+        return Err(ParseError::of(ParseErrorKind::ExpectedTwoArguments));
     }
     let value = Box::new(parse_expr(&args[0], ctx)?);
     let obj = args[1]
@@ -585,6 +743,8 @@ fn parse_number_format(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     })
 }
 
+/// Parse `["within", geojson]`, extracting polygon rings (as `[lng, lat]`)
+/// from a Polygon, MultiPolygon, Feature, or FeatureCollection.
 fn parse_within(args: &[Json]) -> Result<Expr> {
     let err = || {
         ParseError::of(ParseErrorKind::GeojsonPolygon {
@@ -762,7 +922,7 @@ fn parse_polygon(rings: &[Json]) -> Option<Vec<Vec<(f64, f64)>>> {
 
 fn parse_format(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     if args.is_empty() {
-        return Err(ParseError::of(ParseErrorKind::FormatAtLeastOne));
+        return Err(ParseError::of(ParseErrorKind::ExpectedAtLeastOneArgument));
     }
     if args[0].is_object() {
         return Err(ParseError::of(ParseErrorKind::FormatFirstSection));
@@ -813,14 +973,24 @@ fn parse_format(args: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
     Ok(Expr::Format(sections))
 }
 
+/// Parse the interpolation-type slot of `interpolate` (`interpolate.ts:106-148`).
+///
+/// Errors are keyed *within* that slot: the caller prepends `[1]`, so an
+/// unknown type name comes out at `[1][0]`, the position of the name itself.
 fn parse_interp_kind(json: &Json) -> Result<InterpKind> {
-    let items = json
-        .as_array()
-        .ok_or_else(|| ParseError::of(ParseErrorKind::InterpolationTypeArray))?;
-    let name = items
-        .first()
-        .and_then(Json::as_str)
-        .ok_or_else(|| ParseError::of(ParseErrorKind::InterpolationTypeName))?;
+    let items = match json.as_array() {
+        // An empty array is rejected the same way a non-array is.
+        Some(items) if !items.is_empty() => items,
+        _ => return Err(ParseError::of(ParseErrorKind::InterpolationTypeArray)),
+    };
+    // A non-string head is not a separate error upstream: it falls through to
+    // "unknown interpolation type", stringified by JavaScript's `String()`.
+    let Some(name) = items[0].as_str() else {
+        return Err(ParseError::of(ParseErrorKind::UnknownInterpolationType {
+            name: js_string(&items[0]),
+        })
+        .at(0));
+    };
     match name {
         "linear" => Ok(InterpKind::Linear),
         "exponential" => {
@@ -850,7 +1020,30 @@ fn parse_interp_kind(json: &Json) -> Result<InterpKind> {
         }
         other => Err(ParseError::of(ParseErrorKind::UnknownInterpolationType {
             name: other.to_string(),
-        })),
+        })
+        .at(0)),
+    }
+}
+
+/// JavaScript's `String()` for a JSON value, as `interpolate.ts:144-147` uses
+/// it to name an unrecognized interpolation type.
+fn js_string(v: &Json) -> String {
+    match v {
+        Json::Null => "null".to_string(),
+        Json::Bool(b) => b.to_string(),
+        Json::Number(n) => n.to_string(),
+        Json::String(s) => s.clone(),
+        // `Array.prototype.toString` joins with "," and renders null/undefined
+        // as the empty string; a plain object is "[object Object]".
+        Json::Array(items) => items
+            .iter()
+            .map(|v| match v {
+                Json::Null => String::new(),
+                other => js_string(other),
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+        Json::Object(_) => "[object Object]".to_string(),
     }
 }
 
@@ -897,17 +1090,14 @@ fn check_ascending(kind: &str, stops: &[(f64, Expr)]) -> Result<()> {
     Ok(())
 }
 
-fn expect_arity(op: &str, args: &[Json], n: usize) -> Result<()> {
-    if args.len() == n {
+/// Check that `op` — one of the operators that names itself in its arity
+/// message (`literal.ts:18-21`) — was given exactly one argument.
+fn expect_one_arg(op: &str, args: &[Json]) -> Result<()> {
+    if args.len() == 1 {
         Ok(())
-    } else if n == 1 {
+    } else {
         Err(ParseError::of(ParseErrorKind::RequiresExactlyOneArg {
             op: op.to_string(),
-            found: args.len(),
-        }))
-    } else {
-        Err(ParseError::of(ParseErrorKind::ExpectedNArgs {
-            n,
             found: args.len(),
         }))
     }

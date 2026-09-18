@@ -36,17 +36,31 @@ pub enum ParseErrorKind {
     UnboundVariable(String),
     /// Misuse of the `zoom` expression.
     Zoom(&'static str),
-    /// An operator that takes exactly one argument (`literal`/`within`/…).
+    /// An operator that names itself and takes exactly one argument
+    /// (`literal`/`within`/`distance`).
     RequiresExactlyOneArg { op: String, found: usize },
-    /// A single-argument coercion (`to-boolean`/`to-string`) with wrong arity.
+    /// An operator that takes exactly one argument and says only that:
+    /// the `to-boolean`/`to-string` coercions and `collator`.
     ExpectedOneArgument,
+    /// An operator that takes exactly two arguments and says only that:
+    /// `image` and `number-format`.
+    ExpectedTwoArguments,
+    /// An operator that takes at least one argument and says only that:
+    /// the `array`/`boolean`/… assertions, the `to-*` coercions, and `format`.
+    ExpectedAtLeastOneArgument,
     /// A `CompoundExpression` whose arity matched no typed overload.
     ExpectedArgsOfType { sig: String, found: String },
-    /// `match` with fewer than four arguments.
-    MatchAtLeast4 { found: usize },
+    /// `match`/`step`/`interpolate`/`case` below their minimum argument count.
+    ExpectedAtLeastArgs { min: usize, found: usize },
+    /// `let` with fewer than three arguments. Worded differently from
+    /// [`ExpectedAtLeastArgs`](Self::ExpectedAtLeastArgs) upstream.
+    LetAtLeast3 { found: usize },
     /// The first (item-type) argument of `array` was not a valid type name.
     ArrayItemType,
-    /// The length argument of `array` was not a positive integer literal.
+    /// The length argument of `array` was neither `null` nor a non-negative
+    /// integer literal. (The message says "positive" — that is MapLibre's
+    /// wording for the same `N < 0 || N !== Math.floor(N)` check, which lets
+    /// `0` through; the port is faithful to the text, not to the word.)
     ArrayLength,
     /// A bare object used where an expression was expected.
     BareObject,
@@ -82,28 +96,19 @@ pub enum ParseErrorKind {
     BranchLabelTooLarge,
     /// A `within`/`distance` argument was not valid polygon geojson.
     GeojsonPolygon { op: String },
-    /// A `let` binding name was not a string.
-    LetBindingNameString,
-    /// A `var` binding name was not a string.
-    VarBindingName,
+    /// A string was required but something else was found (a `let` binding
+    /// name). `found` is the JS `typeof` of the raw argument.
+    ExpectedString { found: &'static str },
+    /// `var` was not given exactly one string-literal argument.
+    VarOneStringLiteral,
     /// The `number-format` options argument was not an object.
     NumberFormatOptionsObject,
     /// A `format` `vertical-align` option had an invalid value.
     VerticalAlign { found: String },
     /// `match`/`step`/`interpolate` given an odd number of arguments.
-    ExpectedEvenArgs { op: &'static str },
+    ExpectedEvenArgs,
     /// `case` given an even number of arguments.
     ExpectedOddArgsCase,
-    /// `let` given an even number of arguments.
-    ExpectedOddArgsLet,
-    /// `format` given no sections.
-    FormatAtLeastOne,
-    /// `collator` given other than one argument.
-    CollatorOneArg,
-    /// `number-format` given other than two arguments.
-    NumberFormatTwoArgs,
-    /// An operator taking a fixed count other than one, with wrong arity.
-    ExpectedNArgs { n: usize, found: usize },
     /// A `format` first argument that was a bare options object.
     FormatFirstSection,
     /// A user macro / expression-function / external-function call with the
@@ -118,15 +123,13 @@ pub enum ParseErrorKind {
     MacroDepth { op: String },
     /// The expression nested deeper than the parser's nesting-depth limit.
     NestingTooDeep { max: usize },
-    /// An `interpolate` stop input was not a number literal.
-    InterpolationStopNumber,
-    /// A `step` stop input was not a number literal.
-    StepStopNumber,
-    /// An interpolation type was not an array (e.g. `["linear"]`).
+    /// A `step`/`interpolate` stop input was not a bare number literal.
+    StopInputLiteral { kind: String },
+    /// The interpolation-type slot of `interpolate` was not a non-empty array
+    /// (e.g. `["linear"]`).
     InterpolationTypeArray,
-    /// An interpolation type name was not a string.
-    InterpolationTypeName,
-    /// An unrecognized interpolation type.
+    /// An unrecognized interpolation type. `name` is the type-array head
+    /// rendered the way JavaScript's `String()` renders it.
     UnknownInterpolationType { name: String },
     /// A `collator` compared non-string operands.
     CollatorNonString,
@@ -174,12 +177,19 @@ impl fmt::Display for ParseErrorKind {
                 "'{op}' expression requires exactly one argument, but found {found} instead."
             ),
             ParseErrorKind::ExpectedOneArgument => write!(f, "Expected one argument."),
+            ParseErrorKind::ExpectedTwoArguments => write!(f, "Expected two arguments."),
+            ParseErrorKind::ExpectedAtLeastOneArgument => {
+                write!(f, "Expected at least one argument.")
+            }
             ParseErrorKind::ExpectedArgsOfType { sig, found } => write!(
                 f,
                 "Expected arguments of type {sig}, but found ({found}) instead."
             ),
-            ParseErrorKind::MatchAtLeast4 { found } => {
-                write!(f, "Expected at least 4 arguments, but found only {found}.")
+            ParseErrorKind::ExpectedAtLeastArgs { min, found } => {
+                write!(f, "Expected at least {min} arguments, but found only {found}.")
+            }
+            ParseErrorKind::LetAtLeast3 { found } => {
+                write!(f, "Expected at least 3 arguments, but found {found} instead.")
             }
             ParseErrorKind::ArrayItemType => write!(
                 f,
@@ -245,38 +255,28 @@ impl fmt::Display for ParseErrorKind {
                 f,
                 "'{op}' expression requires valid geojson object that contains polygon geometry type."
             ),
-            ParseErrorKind::LetBindingNameString => {
-                write!(f, "'let' binding names must be strings.")
+            ParseErrorKind::ExpectedString { found } => {
+                write!(f, "Expected string, but found {found} instead.")
             }
-            ParseErrorKind::VarBindingName => write!(f, "'var' requires a string binding name."),
+            ParseErrorKind::VarOneStringLiteral => write!(
+                f,
+                "'var' expression requires exactly one string literal argument."
+            ),
             ParseErrorKind::NumberFormatOptionsObject => {
-                write!(f, "'number-format' options must be an object.")
+                write!(f, "NumberFormat options argument must be an object.")
             }
             ParseErrorKind::VerticalAlign { found } => write!(
                 f,
                 "'vertical-align' must be one of: 'bottom', 'center', 'top' but found '{found}' instead."
             ),
-            ParseErrorKind::ExpectedEvenArgs { op } => {
-                write!(f, "Expected an even number of arguments (>= 4) to '{op}'.")
+            ParseErrorKind::ExpectedEvenArgs => {
+                write!(f, "Expected an even number of arguments.")
             }
             ParseErrorKind::ExpectedOddArgsCase => {
-                write!(f, "Expected an odd number of arguments (>= 3) to 'case'.")
-            }
-            ParseErrorKind::ExpectedOddArgsLet => {
-                write!(f, "Expected an odd number of arguments to 'let'.")
-            }
-            ParseErrorKind::FormatAtLeastOne => {
-                write!(f, "Expected at least one argument to 'format'.")
-            }
-            ParseErrorKind::CollatorOneArg => write!(f, "Expected one argument to 'collator'."),
-            ParseErrorKind::NumberFormatTwoArgs => {
-                write!(f, "Expected two arguments to 'number-format'.")
-            }
-            ParseErrorKind::ExpectedNArgs { n, found } => {
-                write!(f, "Expected {n} arguments, but found {found} instead.")
+                write!(f, "Expected an odd number of arguments.")
             }
             ParseErrorKind::FormatFirstSection => {
-                write!(f, "First argument to 'format' must be an image or text section.")
+                write!(f, "First argument must be an image or text section.")
             }
             ParseErrorKind::ExtArgCount {
                 kind,
@@ -295,18 +295,15 @@ impl fmt::Display for ParseErrorKind {
                 "Expression nested more than {max} levels deep; the parser accepts at most \
                  {max} levels of nesting."
             ),
-            ParseErrorKind::InterpolationStopNumber => {
-                write!(f, "Interpolation stop inputs must be numbers.")
-            }
-            ParseErrorKind::StepStopNumber => write!(f, "Step stop inputs must be numbers."),
+            ParseErrorKind::StopInputLiteral { kind } => write!(
+                f,
+                "Input/output pairs for \"{kind}\" expressions must be defined using literal numeric values (not computed expressions) for the input values."
+            ),
             ParseErrorKind::InterpolationTypeArray => {
-                write!(f, "Interpolation type must be an array, e.g. [\"linear\"].")
-            }
-            ParseErrorKind::InterpolationTypeName => {
-                write!(f, "Interpolation type name must be a string.")
+                write!(f, "Expected an interpolation type expression.")
             }
             ParseErrorKind::UnknownInterpolationType { name } => {
-                write!(f, "Unknown interpolation type \"{name}\".")
+                write!(f, "Unknown interpolation type {name}")
             }
             ParseErrorKind::CollatorNonString => {
                 write!(f, "Cannot use collator to compare non-string types.")
@@ -388,8 +385,11 @@ pub enum EvalErrorKind {
     CouldNotConvertToNumber { value: String },
     /// An `at` index was negative.
     ArrayIndexNegative { index: f64 },
-    /// An `at` index was past the end of the array.
-    ArrayIndexOutOfBounds { index: f64, max: usize },
+    /// An `at` index was past the end of the array. `max` is the last valid
+    /// index, so it is `-1` for an empty array — upstream interpolates
+    /// `array.length - 1` into the message and JavaScript happily prints the
+    /// negative value (`at.ts:44-47`).
+    ArrayIndexOutOfBounds { index: f64, max: i64 },
     /// An `at` index was not an integer.
     ArrayIndexNotInteger { index: f64 },
     /// An `rgb`/`rgba`/`to-color` array value was out of range or malformed.
@@ -410,6 +410,13 @@ pub enum EvalErrorKind {
     /// `zoom` used where no zoom is available.
     ZoomUnavailable,
     /// An operator MapLibre defines but this crate does not evaluate yet.
+    ///
+    /// The parser accepts every name in MapLibre's expression registry so that
+    /// the arguments still parse and the location keys still line up; the ones
+    /// with no evaluator — currently the `filter-*` family that MapLibre
+    /// generates internally from legacy filters — land here instead. Names
+    /// outside that registry are rejected at parse time as
+    /// [`ParseErrorKind::UnknownExpression`], never reaching evaluation.
     Unimplemented { op: String },
     /// An unbound `var` reference at evaluation time.
     UnknownVariable { name: String },
