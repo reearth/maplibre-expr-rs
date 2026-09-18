@@ -135,15 +135,21 @@ impl Evaluator<'_> {
                 let n = self.eval_number(value)?;
                 let currency = self.eval_opt_string(currency)?;
                 let unit = self.eval_opt_string(unit)?;
-                let min_frac = self.eval_opt_number(min_fraction_digits)?;
-                let max_frac = self.eval_opt_number(max_fraction_digits)?;
+                let min_frac = self
+                    .eval_opt_number(min_fraction_digits)?
+                    .map(|v| fraction_digit_option("minimumFractionDigits", v))
+                    .transpose()?;
+                let max_frac = self
+                    .eval_opt_number(max_fraction_digits)?
+                    .map(|v| fraction_digit_option("maximumFractionDigits", v))
+                    .transpose()?;
                 Ok(Value::String(format_number_intl(
                     n,
                     currency.as_deref(),
                     unit.as_deref(),
-                    min_frac.map(|v| v as usize),
-                    max_frac.map(|v| v as usize),
-                )))
+                    min_frac,
+                    max_frac,
+                )?))
             }
             Expr::Assert(ty, inner) => {
                 let v = self.eval(inner)?;
@@ -413,8 +419,22 @@ impl Evaluator<'_> {
             "heatmap-density" => Ok(Value::Number(self.ctx.heatmap_density.unwrap_or(0.0))),
             "elevation" => Ok(Value::Number(self.ctx.elevation.unwrap_or(0.0))),
             "line-progress" => Ok(Value::Number(self.ctx.line_progress.unwrap_or(0.0))),
-            // Without the RTL-text plugin the reference reports every script as
-            // supported.
+            // Unconditionally true, matching upstream. `is-supported-script`
+            // consults `ctx.globals.isSupportedScript`, a hook the renderer
+            // installs only once the RTL-text plugin is loaded, and returns
+            // `true` when it is absent:
+            //
+            //     const isSupportedScript = ctx.globals && ctx.globals.isSupportedScript;
+            //     if (isSupportedScript) { return isSupportedScript(s.evaluate(ctx)); }
+            //     return true;
+            //
+            // (`src/expression/compound_expression.ts:500-511` at the pinned
+            // upstream commit; the comment there reads "At parse time this will
+            // always return true".) maplibre-style-spec never sets that global
+            // itself — it is `GlobalProperties.isSupportedScript?`, declared in
+            // `src/expression/index.ts:109` and only forwarded — so the
+            // spec-level behaviour this crate ports is the `true` branch, and
+            // the evaluation context here has no plugin hook to install.
             "is-supported-script" => {
                 self.eval(&args[0])?;
                 Ok(Value::Bool(true))
@@ -1828,15 +1848,44 @@ fn unit_suffix(unit: &str) -> String {
     }
 }
 
-/// Format a number the way `Intl.NumberFormat('en-US', ...)` does for the
-/// options exercised by the spec fixtures.
+/// Resolve one fraction-digit option the way ECMA-402
+/// `DefaultNumberOption(value, 0, 100, undefined)` (ECMA-402 §9.2.13) does:
+/// a value that is not finite, or that falls outside `[0, 100]`, is a
+/// `RangeError`; otherwise it is floored.
+///
+/// Measured against node v25.2.1:
+/// `new Intl.NumberFormat('en-US', {minimumFractionDigits: -1})` →
+/// `RangeError: minimumFractionDigits value is out of range.`, and
+/// `{maximumFractionDigits: 1.7}` formats `1.55` as `"1.6"` (floored to 1).
+fn fraction_digit_option(option: &'static str, v: f64) -> Result<usize> {
+    if !v.is_finite() || v < 0.0 || v > 100.0 {
+        return Err(EvalError::of(EvalErrorKind::NumberFormatDigits {
+            option,
+            value: v,
+        }));
+    }
+    Ok(v.floor() as usize)
+}
+
+/// Format a number the way `Intl.NumberFormat('en-US', ...)` does.
+///
+/// Only the options `number-format` itself exposes are handled (currency, unit
+/// and the fraction-digit pair); notation, rounding modes and significant
+/// digits are not reachable from the expression language. Within that surface
+/// the digit resolution follows ECMA-402 §16.1.2 `SetNumberFormatDigitOptions`
+/// rather than approximating it, and the results below were checked against
+/// node v25.2.1.
+///
+/// The one deliberate narrowing is the locale: upstream passes the style's
+/// `locale` option through to `Intl.NumberFormat` (`number_format.ts:105`),
+/// while this port always formats in `en-US`.
 fn format_number_intl(
     n: f64,
     currency: Option<&str>,
     unit: Option<&str>,
     min_frac: Option<usize>,
     max_frac: Option<usize>,
-) -> String {
+) -> Result<String> {
     let (def_min, def_max) = match currency {
         Some(code) => {
             let d = currency_digits(code);
@@ -1844,22 +1893,56 @@ fn format_number_intl(
         }
         None => (0, 3),
     };
-    let min = min_frac.unwrap_or(def_min);
-    let max = max_frac.unwrap_or(def_max).max(min);
-    let body = format_decimal_us(n, min, max);
+    // ECMA-402 §16.1.2 SetNumberFormatDigitOptions: "If mnfd is undefined, set
+    // mnfd to min(mnfdDefault, mxfd). Else if mxfd is undefined, set mxfd to
+    // max(mxfdDefault, mnfd). Else if mnfd is greater than mxfd, throw a
+    // RangeError exception." The default is only ever relaxed towards the
+    // option the caller gave; two explicit options are never reconciled.
+    let (min, max) = match (min_frac, max_frac) {
+        (None, None) => (def_min, def_max),
+        (None, Some(mx)) => (def_min.min(mx), mx),
+        (Some(mn), None) => (mn, def_max.max(mn)),
+        (Some(mn), Some(mx)) => {
+            if mn > mx {
+                return Err(EvalError::of(EvalErrorKind::NumberFormatDigits {
+                    option: "maximumFractionDigits",
+                    value: mx as f64,
+                }));
+            }
+            (mn, mx)
+        }
+    };
+    // ECMA-402 §16.5.4 PartitionNumberPattern formats a NaN or infinite value
+    // as an implementation- and locale-dependent string *before* any digit
+    // option applies, and §16.5.5 emits it as a single "nan" / "infinity" part.
+    // For en-US those strings are "NaN" and "∞" (node v25.2.1:
+    // `Intl.NumberFormat('en-US').format(1/0)` → "∞", `format(-1/0)` → "-∞",
+    // `format(0/0)` → "NaN").
+    let negative = n.is_sign_negative() && !n.is_nan();
+    let body = if n.is_nan() {
+        "NaN".to_string()
+    } else if n.is_infinite() {
+        "∞".to_string()
+    } else {
+        format_decimal_us(n.abs(), min, max)
+    };
+    let sign = if negative { "-" } else { "" };
+    // The currency symbol sits inside the sign, not outside it: node v25.2.1
+    // formats -1 USD as "-$1.00" and -Infinity USD as "-$∞".
     if let Some(code) = currency {
-        return format!("{}{}", currency_symbol(code), body);
+        return Ok(format!("{sign}{}{body}", currency_symbol(code)));
     }
     if let Some(u) = unit {
-        return format!("{}{}", body, unit_suffix(u));
+        return Ok(format!("{sign}{body}{}", unit_suffix(u)));
     }
-    body
+    Ok(format!("{sign}{body}"))
 }
 
+/// Format the magnitude `n` (assumed finite and non-negative) with `min`..`max`
+/// fraction digits and en-US thousands grouping. The sign is the caller's job.
 fn format_decimal_us(n: f64, min: usize, max: usize) -> String {
-    let neg = n < 0.0;
     // The shortest round-trip decimal, matching JavaScript's Number->String.
-    let s = format!("{}", n.abs());
+    let s = format!("{n}");
     let (int_part, frac_part) = match s.split_once('.') {
         Some((i, f)) => (i.to_string(), f.to_string()),
         None => (s, String::new()),
@@ -1873,9 +1956,6 @@ fn format_decimal_us(n: f64, min: usize, max: usize) -> String {
         frac.pop();
     }
     let mut out = String::new();
-    if neg {
-        out.push('-');
-    }
     out.push_str(&group_thousands(&int_r));
     if !frac.is_empty() {
         out.push('.');
@@ -1929,9 +2009,32 @@ fn group_thousands(int: &str) -> String {
 // ---- collator comparison ----------------------------------------------
 
 /// Compare two values with a collator, mirroring `Intl.Collator.compare`.
-/// Intl's `sensitivity` is expressed as an ICU collation strength plus a case
-/// level: base → primary, accent → secondary, case → primary + case level,
-/// variant → tertiary. Locale tailoring comes from CLDR via `icu_collator`.
+///
+/// Upstream builds the collator from the two booleans exactly as below, then
+/// asks Intl for `usage: 'search'`:
+///
+/// ```js
+/// if (caseSensitive) this.sensitivity = diacriticSensitive ? 'variant' : 'case';
+/// else this.sensitivity = diacriticSensitive ? 'accent' : 'base';
+/// this.collator = new Intl.Collator(this.locale ? this.locale : [],
+///                                   {sensitivity: this.sensitivity, usage: 'search'});
+/// ```
+///
+/// (`src/expression/types/collator.ts:6-15` at the pinned upstream commit.)
+/// ECMA-402 §10.3.3.2 Table 4 fixes what each sensitivity distinguishes
+/// ("a" vs. "á" / "a" vs. "A"): base = equal/equal, accent = unequal/equal,
+/// case = equal/unequal, variant = unequal/unequal. `icu_collator` documents
+/// the same four values as the `Strength` + `CaseLevel` pairs used below —
+/// base → `Primary`, accent → `Secondary`, case → `Primary` + `CaseLevel::On`,
+/// variant → `Tertiary` (icu_collator 2.3.1, `src/options.rs`, "ECMA-402
+/// Sensitivity"), so the match arms are that table read through the two
+/// booleans.
+///
+/// `usage: 'search'` has no counterpart here: ICU4X spells it `-u-co-search`
+/// and "ICU4X data does not include search collations by default"
+/// (icu_collator 2.3.1, `src/options.rs`, "ECMA-402 Usage"), which the
+/// `compiled_data` feature this crate links is. The German rewrite below
+/// substitutes for it; see the comment there.
 #[cfg(feature = "collator")]
 fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     use icu_collator::{
@@ -1961,8 +2064,21 @@ fn collator_compare(collator: &Value, a: &Value, b: &Value) -> Option<std::cmp::
 
     let prefs: CollatorPreferences = match locale {
         Some(l) => {
-            // German uses phonebook ordering here (ü ≈ ue, ä sorts after a),
-            // matching the reference fixtures.
+            // Stand-in for the `usage: 'search'` collation ICU4X's compiled
+            // data omits. German search collation expands the umlauts
+            // (ü ≈ ue, ö ≈ oe, ä ≈ ae) the way the phonebook collation does,
+            // and the standard German collation this crate would otherwise get
+            // does not — which the `collator/accent-equals-de` fixture pins
+            // ("ü" == "ue" is expected `true`, "ü" == "u" `false`).
+            //
+            // Measured rather than assumed: over 21 German string pairs × the
+            // four sensitivities, `de-u-co-phonebk` here and
+            // `new Intl.Collator('de', {sensitivity, usage: 'search'})` on node
+            // v25.2.1 agree on all 84 comparisons, including the pairs that
+            // separate the two collations (e.g. "ö" vs. "od", where search and
+            // phonebook both order "ö" after and standard German before).
+            // Upstream has no such rewrite; it gets the behaviour from
+            // `usage: 'search'`.
             let tag = if l.split(['-', '_']).next() == Some("de") && !l.contains("-co-") {
                 "de-u-co-phonebk".to_string()
             } else {
@@ -2077,6 +2193,200 @@ mod tests {
             eval_str(json!(["number-format", 1e20, {}])),
             "100,000,000,000,000,000,000"
         );
+    }
+
+    /// `number-format` of a non-finite number. ECMA-402 §16.5.4 formats NaN
+    /// and ±∞ as locale strings before any digit option applies; the expected
+    /// values here are node v25.2.1's
+    /// `new Intl.NumberFormat('en-US', opts).format(v)`.
+    #[test]
+    fn number_format_of_non_finite_numbers_matches_intl() {
+        let inf = json!(["/", 1.0, 0.0]);
+        let neg_inf = json!(["/", -1.0, 0.0]);
+        let nan = json!(["/", 0.0, 0.0]);
+        assert_eq!(eval_str(json!(["number-format", inf, {}])), "∞");
+        assert_eq!(eval_str(json!(["number-format", neg_inf, {}])), "-∞");
+        assert_eq!(eval_str(json!(["number-format", nan, {}])), "NaN");
+        // Digit options do not turn into fraction digits on a non-finite value.
+        assert_eq!(
+            eval_str(json!(["number-format", inf, {"min-fraction-digits": 2}])),
+            "∞"
+        );
+        // …and the currency symbol sits inside the sign, not outside it.
+        assert_eq!(
+            eval_str(json!(["number-format", inf, {"currency": "USD"}])),
+            "$∞"
+        );
+        assert_eq!(
+            eval_str(json!(["number-format", neg_inf, {"currency": "USD"}])),
+            "-$∞"
+        );
+        assert_eq!(
+            eval_str(json!(["number-format", neg_inf, {"unit": "kilometer"}])),
+            "-∞ km"
+        );
+        // Negative zero keeps its sign, as `format(-0)` does.
+        assert_eq!(
+            eval_str(json!(["number-format", ["*", -1.0, 0.0], {}])),
+            "-0"
+        );
+    }
+
+    /// The same sign placement for ordinary negative amounts: node v25.2.1
+    /// formats -1 as "-$1.00", not "$-1.00".
+    #[test]
+    fn number_format_puts_the_sign_outside_the_currency_symbol() {
+        assert_eq!(
+            eval_str(json!(["number-format", -1.0, {"currency": "USD"}])),
+            "-$1.00"
+        );
+        assert_eq!(
+            eval_str(json!(["number-format", -1234.5, {"unit": "meter"}])),
+            "-1,234.5 m"
+        );
+    }
+
+    /// ECMA-402 §16.1.2 `SetNumberFormatDigitOptions` reconciles a missing
+    /// fraction-digit option with the style's default, but rejects a
+    /// `min > max` pair given explicitly rather than clamping it. Upstream
+    /// hands both options to `Intl.NumberFormat` and so raises the same
+    /// `RangeError`; over a constant expression it surfaces while
+    /// constant-folding, as every folded runtime error does.
+    #[test]
+    fn number_format_rejects_min_fraction_digits_above_max() {
+        assert_eq!(
+            eval_err(
+                json!(["number-format", 1.23456, {"min-fraction-digits": 4, "max-fraction-digits": 1}]),
+                &[]
+            ),
+            "maximumFractionDigits value is out of range."
+        );
+        // Also on the evaluation path, where the options come from the feature
+        // and nothing was folded. (Upstream, both spellings were run against
+        // the pinned commit: the constant one is a compile error carrying that
+        // message, the `["get", …]` one throws the same `RangeError` from
+        // `evaluateWithoutErrorHandling`.)
+        assert_eq!(
+            eval_err(
+                json!(["number-format", 1.23456, {"min-fraction-digits": ["get", "min"], "max-fraction-digits": ["get", "max"]}]),
+                &[("min", Value::Number(4.0)), ("max", Value::Number(1.0))]
+            ),
+            "maximumFractionDigits value is out of range."
+        );
+        // A default is still relaxed towards an explicit option, in both
+        // directions: node v25.2.1 formats 1.5 USD as "$1.5" with
+        // maximumFractionDigits 1 (the currency default of 2 lowered to 1) and
+        // as "$1.500" with minimumFractionDigits 3 (raised to 3).
+        assert_eq!(
+            eval_str(json!(["number-format", 1.5, {"currency": "USD", "max-fraction-digits": 1}])),
+            "$1.5"
+        );
+        assert_eq!(
+            eval_str(json!(["number-format", 1.5, {"currency": "USD", "min-fraction-digits": 3}])),
+            "$1.500"
+        );
+    }
+
+    /// ECMA-402 §9.2.13 `DefaultNumberOption(value, 0, 100, undefined)`: a
+    /// fraction-digit option outside `[0, 100]`, or not finite, is a
+    /// `RangeError`. Before this was enforced, `min-fraction-digits` doubled as
+    /// an allocation knob — 1e6 produced a megabyte of zeros.
+    #[test]
+    fn number_format_rejects_out_of_range_fraction_digits() {
+        let cases: &[(serde_json::Value, &str)] = &[
+            (
+                json!(["number-format", 1.0, {"min-fraction-digits": -1}]),
+                "minimumFractionDigits value is out of range.",
+            ),
+            (
+                json!(["number-format", 1.0, {"max-fraction-digits": 101}]),
+                "maximumFractionDigits value is out of range.",
+            ),
+            (
+                json!(["number-format", 1.0, {"min-fraction-digits": 1000000}]),
+                "minimumFractionDigits value is out of range.",
+            ),
+            (
+                json!(["number-format", 1.0, {"max-fraction-digits": ["/", 1.0, 0.0]}]),
+                "maximumFractionDigits value is out of range.",
+            ),
+        ];
+        for (expr, message) in cases {
+            assert_eq!(&eval_err(expr.clone(), &[]), message, "for {expr}");
+        }
+        // The boundary itself is accepted, and a fractional option floors.
+        assert_eq!(
+            eval_str(json!(["number-format", 1.0, {"max-fraction-digits": 100}])),
+            "1"
+        );
+        assert_eq!(
+            eval_str(json!(["number-format", 1.55, {"max-fraction-digits": 1.7}])),
+            "1.6"
+        );
+    }
+
+    /// `is-supported-script` reports every script as supported, because
+    /// upstream's `ctx.globals.isSupportedScript` hook is absent outside a
+    /// renderer with the RTL-text plugin loaded
+    /// (`compound_expression.ts:500-511`).
+    #[test]
+    fn is_supported_script_is_true_for_every_script() {
+        for s in ["Hello", "مرحبا", "こんにちは", "दिल्ली", ""] {
+            assert_eq!(
+                run(json!(["is-supported-script", s]), &[]),
+                Ok(Value::Bool(true)),
+                "for {s:?}"
+            );
+        }
+    }
+
+    /// The ECMA-402 sensitivity table (§10.3.3.2, Table 4) read through the two
+    /// collator booleans, checked against node v25.2.1's
+    /// `new Intl.Collator('en', {sensitivity, usage: 'search'})`.
+    #[cfg(feature = "collator")]
+    #[test]
+    fn collator_sensitivity_matches_the_ecma402_table() {
+        // (case-sensitive, diacritic-sensitive) => ("a" vs "á", "a" vs "A")
+        let cases: &[(bool, bool, bool, bool)] = &[
+            (false, false, true, true), // base:    equal,   equal
+            (false, true, false, true), // accent:  unequal, equal
+            (true, false, true, false), // case:    equal,   unequal
+            (true, true, false, false), // variant: unequal, unequal
+        ];
+        for &(cs, ds, accent_equal, case_equal) in cases {
+            let coll = json!(["collator", {"case-sensitive": cs, "diacritic-sensitive": ds, "locale": "en"}]);
+            let eq = |a: &str, b: &str| {
+                run(json!(["==", a, b, coll.clone()]), &[]) == Ok(Value::Bool(true))
+            };
+            assert_eq!(eq("a", "á"), accent_equal, "a/á for ({cs}, {ds})");
+            assert_eq!(eq("a", "A"), case_equal, "a/A for ({cs}, {ds})");
+        }
+    }
+
+    /// German comparisons stand in for `usage: 'search'`, which ICU4X's
+    /// compiled data omits. Expected values are node v25.2.1's
+    /// `new Intl.Collator('de', {sensitivity: 'case', usage: 'search'})`.
+    #[cfg(feature = "collator")]
+    #[test]
+    fn collator_de_expands_umlauts_like_the_search_collation() {
+        let coll = json!(["collator", {"case-sensitive": true, "diacritic-sensitive": false, "locale": "de"}]);
+        let cmp = |a: &str, b: &str| {
+            if run(json!(["<", a, b, coll.clone()]), &[]) == Ok(Value::Bool(true)) {
+                -1
+            } else if run(json!([">", a, b, coll.clone()]), &[]) == Ok(Value::Bool(true)) {
+                1
+            } else {
+                0
+            }
+        };
+        assert_eq!(cmp("ü", "ue"), 0);
+        assert_eq!(cmp("ö", "oe"), 0);
+        assert_eq!(cmp("ä", "ae"), 0);
+        assert_eq!(cmp("ü", "u"), 1);
+        // The pair that separates the search/phonebook expansion from the
+        // standard German collation, where "ö" would sort before "od".
+        assert_eq!(cmp("ö", "od"), 1);
+        assert_eq!(cmp("Müller", "Mueller"), 0);
     }
 
     /// B9: `to-string` of an array is JSON, so a control character comes out

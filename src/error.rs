@@ -405,6 +405,17 @@ pub enum EvalErrorKind {
     },
     /// An `in`/`index-of` needle was not a primitive.
     SearchNeedle { found: String },
+    /// A `number-format` fraction-digit option the `Intl.NumberFormat`
+    /// constructor rejects: one outside `[0, 100]` or not finite (ECMA-402
+    /// §9.2.13 `DefaultNumberOption`), or a `min-fraction-digits` greater than
+    /// the `max-fraction-digits` given alongside it (ECMA-402 §16.1.2
+    /// `SetNumberFormatDigitOptions`, which names `maximumFractionDigits` in
+    /// that case — as V8 does). Upstream reaches the same `RangeError` by
+    /// handing the options straight to `Intl.NumberFormat`
+    /// (`number_format.ts:105`); `StyleExpression.evaluate` then logs it and
+    /// falls back to the property's default (`expression/index.ts:186-194`).
+    /// `option` is the ECMA-402 option name and `value` the offending number.
+    NumberFormatDigits { option: &'static str, value: f64 },
     /// An interpolation produced an uninterpolatable output at runtime.
     InterpolationOutputs,
     /// An expression function recursed past the call-depth limit.
@@ -466,6 +477,9 @@ impl fmt::Display for EvalErrorKind {
                 f,
                 "Expected first argument to be of type boolean, string, number or null, but found {found} instead."
             ),
+            EvalErrorKind::NumberFormatDigits { option, .. } => {
+                write!(f, "{option} value is out of range.")
+            }
             EvalErrorKind::InterpolationOutputs => write!(
                 f,
                 "Interpolation outputs must be numbers, colors, or arrays of numbers."
