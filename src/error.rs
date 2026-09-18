@@ -12,6 +12,7 @@ use std::fmt;
 
 /// The semantic cause of a parse/compile error.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ParseErrorKind {
     /// A wrapped runtime error surfaced by compile-time constant folding.
     /// (Every intrinsic parse error has a dedicated variant below.)
@@ -365,6 +366,7 @@ impl std::error::Error for ParseError {}
 
 /// The semantic cause of an evaluation error.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum EvalErrorKind {
     /// A message-only error: the user-thrown `["error", msg]` operator, or a
     /// parse error wrapped while compiling an expression-function body.

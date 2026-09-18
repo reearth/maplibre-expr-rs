@@ -37,6 +37,7 @@ use crate::ext::Options;
 
 /// A legacy filter that could not be converted to an expression.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum FilterError {
     /// A property operand of a legacy comparison/`in`/`has` was not a string
     /// (legacy filters name the property with a bare string). `op` is the
@@ -61,6 +62,7 @@ impl std::error::Error for FilterError {}
 /// (structurally malformed legacy filter) or an expression parse error on the
 /// converted result.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ParseFilterError {
     /// The input was a malformed *legacy* filter that [`convert_legacy_filter`]
     /// could not rewrite (e.g. a non-string property operand).

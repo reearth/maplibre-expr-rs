@@ -4,7 +4,7 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0]
 
 A correctness pass that collated the crate against maplibre-style-spec at the
 pinned commit `ef522e45`. Most of it is invisible — the conformance suite
@@ -37,8 +37,13 @@ read *Changed* before upgrading.
 
 ### Changed
 
-- **Breaking:** `ParseErrorKind` gained and lost variants, and it is *not*
-  `#[non_exhaustive]`, so an exhaustive `match` on it will no longer compile.
+- **Breaking:** `ParseErrorKind`, `EvalErrorKind`, `FilterError`,
+  `ParseFilterError` and `MigrateError` are now `#[non_exhaustive]`, so a
+  `match` on any of them needs a `_` arm. In exchange, adding a variant stops
+  being a breaking change — which is why this release, the one that has to
+  break them anyway, is where it happens.
+- **Breaking:** `ParseErrorKind` gained and lost variants, so an exhaustive
+  `match` on it will no longer compile.
   Removed: `MatchAtLeast4`, `ExpectedOddArgsLet`, `FormatAtLeastOne`,
   `CollatorOneArg`, `NumberFormatTwoArgs`, `ExpectedNArgs`, `StepStopNumber`,
   `InterpolationStopNumber`, `InterpolationTypeName`, `LetBindingNameString`,

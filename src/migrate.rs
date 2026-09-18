@@ -56,6 +56,7 @@ pub fn property_spec(name: &str) -> Option<&'static Json> {
 
 /// Why a style could not be migrated.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum MigrateError {
     /// The style's `version` was not `8` (or was missing). Carries the value
     /// found.
