@@ -711,3 +711,34 @@ fn format_rejects_a_null_first_argument() {
     assert_ok(json!(["format", ["get", "name"]]));
     assert_ok(json!(["format", "a", { "font-scale": 2 }]));
 }
+
+// ---------------------------------------------------------------------------
+// A varargs overload removes the argument ceiling
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_and_any_accept_any_number_of_arguments() {
+    // `all` and `any` carry two overloads upstream (compound_expression.ts:469)
+    // -- (boolean, boolean) and varargs(boolean) -- and the vendored fixtures
+    // only ever use exactly two arguments, so nothing there exercises the
+    // varargs one. Real styles use it constantly:
+    // ["all", ["==", …], ["==", …], ["!=", …], ["!=", …]].
+    for op in ["all", "any"] {
+        for n in 0..=6 {
+            let mut e = vec![json!(op)];
+            e.extend(std::iter::repeat_n(json!(true), n));
+            assert_ok(serde_json::Value::Array(e));
+        }
+    }
+    assert_ok(json!([
+        "all",
+        ["==", ["get", "admin_level"], 2],
+        ["==", ["get", "disputed"], true],
+        ["!=", ["get", "maritime"], true],
+        ["!=", ["get", "coastline"], true]
+    ]));
+    // The other variadic compound expressions keep working too.
+    assert_ok(json!(["+", 1, 2, 3, 4, 5]));
+    assert_ok(json!(["concat", "a", "b", "c", "d"]));
+    assert_ok(json!(["max", 1, 2, 3, 4]));
+}
