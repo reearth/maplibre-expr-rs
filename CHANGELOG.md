@@ -4,6 +4,52 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1]
+
+Finishes the 0.5.0 collation. Four behaviours had been left explicitly
+unverified against upstream because the conformance fixtures do not reach
+them; checking them found two real divergences, both in `number-format`, and
+confirmed the other two were already correct.
+
+### Fixed
+
+- `number-format` rendered non-finite numbers with Rust's spelling: `"inf"`,
+  `"-inf"`. ECMA-402 resolves these before any digit handling, so
+  `Intl.NumberFormat` gives `"∞"`, `"-∞"` and `"NaN"` — and `"$∞"` under
+  `style: "currency"`. Reachable from a style with
+  `["number-format", ["/", 1, 0], {}]`.
+- `number-format` placed a minus sign inside the currency symbol, so a
+  negative amount formatted as `"$-1.00"` instead of `"-$1.00"`. Negative
+  money is an ordinary input.
+- `number-format` of `-0` produced `"0"` rather than `"-0"`.
+- `number-format` silently clamped `min-fraction-digits` up to
+  `max-fraction-digits` when the first exceeded the second. ECMA-402
+  §16.1.2 throws a `RangeError` for that combination, and §9.2.13 also
+  rejects a fraction-digit option outside `0..=100`. Both now produce an
+  error whose text matches upstream's, as
+  `EvalErrorKind::NumberFormatDigits`; for a constant expression it surfaces
+  at compile time, as it does upstream. This also closes an unbounded
+  allocation: `{"min-fraction-digits": 1000000}` used to build a one-megabyte
+  string from a single style value.
+
+### Added
+
+- `EvalErrorKind::NumberFormatDigits { option, value }`. The enum is
+  `#[non_exhaustive]`, so this is additive.
+
+### Changed
+
+- Comments asserting upstream behaviour in `is-supported-script` and in the
+  collator's sensitivity mapping were checked and are correct; they now cite
+  the upstream file and line, the ECMA-402 section, and the `icu_collator`
+  documentation rather than stating it unsourced. The README gains an
+  implementation note recording what the collator cannot reproduce —
+  ICU4X ships no search collations, so upstream's `usage: "search"` is
+  approximated (`de` via `de-u-co-phonebk`, which agrees with Node's search
+  collation across all 84 German comparisons tried, with two Japanese
+  kana-width pairs remaining) — and that `number-format` always formats as
+  `en-US`.
+
 ## [0.5.0]
 
 A correctness pass that collated the crate against maplibre-style-spec at the

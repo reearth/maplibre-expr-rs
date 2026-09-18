@@ -251,7 +251,18 @@ parity. It does not assert the other static-analysis fields (`type`,
 - Feature coordinates round-trip through tile coordinates before `distance` /
   `within`, matching MapLibre's quantization.
 - **`collator` uses CLDR collation via [`icu_collator`]**; Intl's `sensitivity`
-  maps to an ICU strength plus case level.
+  maps to an ICU strength plus case level, as `icu_collator` documents
+  (base → primary, accent → secondary, case → primary + case level,
+  variant → tertiary). Upstream additionally asks Intl for `usage: 'search'`,
+  which ICU4X's compiled data does not carry; German is rewritten to the
+  phonebook collation to stand in for it, which matches node's German search
+  collation on every pair tested. Japanese kana at `variant` sensitivity are
+  the known residual: the search collation separates hiragana from katakana,
+  the standard one does not.
+- **`number-format` always formats in `en-US`**, ignoring the `locale` option
+  that upstream forwards to `Intl.NumberFormat`. Everything else about it —
+  currency and unit styles, the ECMA-402 fraction-digit rules, `NaN` and `∞` —
+  follows `Intl.NumberFormat('en-US', …)`.
 
 ## Community
 
