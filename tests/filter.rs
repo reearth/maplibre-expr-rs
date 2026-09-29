@@ -7,8 +7,10 @@
 
 use std::collections::BTreeMap;
 
-use maplibre_expr::filter::{convert_legacy_filter, is_expression_filter, FilterError};
-use maplibre_expr::{evaluate, parse, EvaluationContext, Feature, Value};
+use maplibre_expr::filter::{
+    convert_legacy_filter, is_expression_filter, parse_filter, FilterError, ParseFilterError,
+};
+use maplibre_expr::{evaluate, parse, typecheck, EvaluationContext, Feature, Type, Value};
 use serde_json::{json, Value as Json};
 
 // --- helpers ---------------------------------------------------------------
@@ -664,6 +666,98 @@ fn foo_named(key: &str, value: Value) -> Feature {
     }
 }
 
+// --- parse_filter (convert + parse convenience) ----------------------------
+
+#[test]
+fn parse_filter_converts_legacy_before_parsing() {
+    // The reduced case from the bug report: a legacy `!=` whose reference
+    // implementation compares a property to a value. Handing it straight to
+    // `parse` + `typecheck` treats "No" as a string literal and errors with
+    // "Cannot compare types 'string' and 'number'."; `parse_filter` converts
+    // "No" to `["get", "No"]` first so the type-check succeeds.
+    let raw = json!(["all", ["!=", "No", 2]]);
+    let expr = parse_filter(&raw).expect("parse_filter should convert legacy filter");
+    typecheck(&expr, Some(&Type::Boolean), false)
+        .expect("converted filter should type-check as boolean");
+
+    // The bare pipeline (parse then typecheck) still errors, which is what
+    // triggered the report.
+    let bare = parse(&raw).expect("legacy shape parses as a modern expression");
+    let err = typecheck(&bare, Some(&Type::Boolean), false)
+        .expect_err("without conversion, type-check should still fail");
+    assert!(
+        matches!(
+            err.kind,
+            maplibre_expr::ParseErrorKind::CannotCompare { .. }
+        ),
+        "expected CannotCompare, got {err:?}",
+    );
+}
+
+#[test]
+fn parse_filter_passes_expression_filters_through() {
+    // A modern expression filter — no bare property names, so conversion is a
+    // no-op and the parsed shape matches `parse` on the same input.
+    let expr = json!(["!=", ["get", "name"], "International Date Line"]);
+    let via_filter = parse_filter(&expr).expect("modern filter should parse");
+    let via_parse = parse(&expr).expect("modern filter should parse");
+    assert_eq!(format!("{via_filter:?}"), format!("{via_parse:?}"));
+}
+
+#[test]
+fn parse_filter_evaluates_the_bug_report_reducer() {
+    // End-to-end: with `parse_filter` in front, the reduced filter from the
+    // bug report evaluates as a legacy filter would — "No" names a property,
+    // so a feature with `No = 1` passes `["!=", "No", 2]` and one with
+    // `No = 2` does not.
+    let raw = json!(["all", ["!=", "No", 2]]);
+    let expr = parse_filter(&raw).unwrap();
+    let expr = typecheck(&expr, Some(&Type::Boolean), false).unwrap();
+    let eval = |feat: Feature| {
+        let ctx = EvaluationContext::new().with_feature(feat);
+        evaluate(&expr, &ctx).unwrap()
+    };
+    let mut props = BTreeMap::new();
+    props.insert("No".to_string(), Value::Number(1.0));
+    assert_eq!(
+        eval(Feature {
+            properties: props,
+            ..Feature::default()
+        }),
+        Value::Bool(true)
+    );
+    let mut props = BTreeMap::new();
+    props.insert("No".to_string(), Value::Number(2.0));
+    assert_eq!(
+        eval(Feature {
+            properties: props,
+            ..Feature::default()
+        }),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn parse_filter_surfaces_conversion_errors() {
+    // A malformed legacy filter (non-string property operand) surfaces as a
+    // `Convert` error rather than being swallowed or misreported as a parse
+    // failure.
+    let err = parse_filter(&json!(["==", 42, 5])).expect_err("bad property should error");
+    assert_eq!(
+        err,
+        ParseFilterError::Convert(FilterError::PropertyNotString { op: "==".into() })
+    );
+}
+
+#[test]
+fn parse_filter_surfaces_parse_errors_on_converted_form() {
+    // A modern expression that is well-formed as a filter classification-wise
+    // but does not parse as an expression (unknown operator). The error should
+    // surface as `Parse`, not `Convert`.
+    let err = parse_filter(&json!(["nope", ["get", "x"]])).expect_err("bad op should error");
+    assert!(matches!(err, ParseFilterError::Parse(_)), "got {err:?}");
+}
+
 #[test]
 fn type_mismatch_semantics_in_any() {
     // ["any", ["all", [">","y",0], [">","y",0]], [">","x",0]] with preflight
@@ -693,4 +787,162 @@ fn type_mismatch_semantics_in_any() {
     assert!(run(filter.clone(), feat(Value::Null, Value::Number(1.0))));
     assert!(run(filter.clone(), feat(Value::Number(1.0), Value::Null)));
     assert!(!run(filter, feat(Value::Null, Value::Null)));
+}
+
+// --- empty filter arrays ----------------------------------------------------
+
+/// `convertFilter([])` reads `filter[0]` (yielding `undefined`) before the
+/// `filter.length <= 1` check, and returns `undefined !== 'any'` — `true`.
+#[test]
+fn empty_filter_array_converts_to_true() {
+    assert_eq!(convert_legacy_filter(&json!([])).unwrap(), json!(true));
+}
+
+#[test]
+fn empty_filter_array_nested_in_a_combiner_converts() {
+    // `["all", legacy, []]` classifies as legacy, so `convert` descends into
+    // the empty array.
+    let filter = json!(["all", ["==", "a", 1], []]);
+    assert_eq!(
+        convert_legacy_filter(&filter).unwrap(),
+        json!(["all", ["==", ["get", "a"], 1], true])
+    );
+    parse_filter(&filter).expect("should parse");
+}
+
+#[test]
+fn empty_filter_array_parses_as_a_boolean_filter() {
+    // `[]` is not an expression filter, so it converts to `true`.
+    assert!(!is_expression_filter(&json!([])));
+    let expr = parse_filter(&json!([])).expect("empty filter should parse");
+    typecheck(&expr, Some(&Type::Boolean), false).expect("should typecheck as a boolean");
+}
+
+/// `[]` is truthy in JS, so `migrate` reaches `convertFilter` for a layer whose
+/// `filter` is an empty array.
+#[test]
+fn migrate_handles_an_empty_layer_filter() {
+    let style = json!({
+        "version": 8,
+        "layers": [{"id": "l", "type": "background", "filter": []}],
+    });
+    let migrated = maplibre_expr::migrate(&style).expect("migrate should succeed");
+    assert_eq!(migrated["layers"][0]["filter"], json!(true));
+}
+
+// --- legacy leaves under `!` and `case` -------------------------------------
+
+/// Upstream's `findMixedLegacyFilter` descends into `!` and `case` as well as
+/// `all`/`any`/`none`. This crate converts the legacy leaves it finds there
+/// instead of rejecting the filter, but descends exactly the same slots — so a
+/// leaf under `!` reads the property rather than comparing two literals.
+#[test]
+fn legacy_leaf_under_not_is_converted() {
+    assert_eq!(
+        convert_legacy_filter(&json!(["!", ["==", "a", 1]])).unwrap(),
+        json!(["!", ["==", ["get", "a"], 1]])
+    );
+
+    let mut props = BTreeMap::new();
+    props.insert("a".to_string(), Value::Number(1.0));
+    let feat = Feature {
+        properties: props,
+        ..Feature::default()
+    };
+    // Unconverted, the leaf compares the string "a" to 1 — always false — so
+    // `!` of it would be true whatever the feature holds.
+    assert!(!run(json!(["!", ["==", "a", 1]]), feat.clone()));
+    assert!(run(json!(["!", ["==", "a", 2]]), feat));
+}
+
+#[test]
+fn legacy_leaf_under_case_condition_is_converted() {
+    assert_eq!(
+        convert_legacy_filter(&json!(["case", ["==", "a", 1], true, false])).unwrap(),
+        json!(["case", ["==", ["get", "a"], 1], true, false])
+    );
+
+    let mut props = BTreeMap::new();
+    props.insert("a".to_string(), Value::Number(1.0));
+    let feat = Feature {
+        properties: props,
+        ..Feature::default()
+    };
+    assert!(run(
+        json!(["case", ["==", "a", 1], true, false]),
+        feat.clone()
+    ));
+    assert!(!run(json!(["case", ["==", "a", 2], true, false]), feat));
+}
+
+#[test]
+fn legacy_leaf_under_a_combiner_wrapped_not_is_converted() {
+    assert_eq!(
+        convert_legacy_filter(&json!(["all", ["!", ["==", "a", 1]]])).unwrap(),
+        json!(["!", ["==", ["get", "a"], 1]])
+    );
+}
+
+#[test]
+fn case_output_slots_are_not_descended() {
+    // Upstream checks conditions only (`i = 1; i < len - 1; i += 2`), so the
+    // output and fallback slots pass through untouched.
+    let filter = json!(["case", ["==", ["get", "a"], 1], ["==", "b", 2], false]);
+    assert_eq!(convert_legacy_filter(&filter).unwrap(), filter);
+}
+
+#[test]
+fn modern_not_and_case_still_pass_through_unchanged() {
+    for filter in [
+        json!(["!", ["==", ["get", "a"], 1]]),
+        json!(["!", ["has", "a"]]),
+        json!(["case", ["==", ["get", "a"], 1], true, false]),
+        json!(["case", ["in", "a", ["literal", [1, 2]]], true, false]),
+    ] {
+        assert_eq!(
+            convert_legacy_filter(&filter).unwrap(),
+            filter,
+            "modern filter should pass through unchanged"
+        );
+    }
+}
+
+// --- `in` value dedupe ------------------------------------------------------
+
+/// Upstream dedupes the `match` labels with JS `!==`, for which `1 === 1.0`.
+/// serde_json distinguishes `Number(1)` from `Number(1.0)`, which otherwise
+/// produces a `match` with a duplicated label.
+#[test]
+fn in_dedupes_integer_and_float_spellings_of_the_same_number() {
+    let filter: Json = serde_json::from_str(r#"["in","a",1,1.0,2]"#).unwrap();
+    let converted = convert_legacy_filter(&filter).unwrap();
+    let labels = converted[2].as_array().unwrap();
+    assert_eq!(labels.len(), 2, "duplicate label in {converted}");
+    assert_eq!(
+        labels
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![1.0, 2.0]
+    );
+}
+
+/// The sort *order* reproduces JS `Array.prototype.sort()` (lexicographic by
+/// string form), which the dedupe change must not disturb.
+#[test]
+fn in_sort_order_is_unchanged() {
+    assert_eq!(
+        convert_legacy_filter(&json!(["in", "a", 10, 9]))
+            .unwrap()
+            .get(2)
+            .unwrap(),
+        &json!([10, 9])
+    );
+    assert_eq!(
+        convert_legacy_filter(&json!(["in", "a", "b", "a", "b"]))
+            .unwrap()
+            .get(2)
+            .unwrap(),
+        &json!(["a", "b"])
+    );
 }

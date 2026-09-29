@@ -25,6 +25,14 @@
 //! Conformance is validated against a vendored snapshot of the
 //! `maplibre-style-spec` expression test fixtures; see `tests/spec.rs`.
 //!
+//! # Feature flags
+//!
+//! - **`collator`** (default): locale-aware `collator` comparisons backed by
+//!   ICU4X's embedded CLDR data. With the feature off the crate carries no ICU
+//!   data — `["collator", …]` still parses and type-checks the same way, but
+//!   comparisons ignore the locale and sensitivity options and fall back to
+//!   code-point order.
+//!
 //! [spec]: https://maplibre.org/maplibre-style-spec/expressions/
 
 mod ast;
@@ -37,23 +45,44 @@ mod eval;
 mod ext;
 pub mod filter;
 mod geometry;
+pub mod migrate;
 mod parse;
 mod typ;
 mod typecheck;
 mod value;
 
-pub use ast::{Expr, InterpKind, InterpSpace};
+pub use ast::{Expr, FormatArg, InterpKind, InterpSpace};
 pub use color::Color;
 pub use context::{EvaluationContext, Feature};
+pub use distance::SimpleGeom;
 pub use error::{EvalError, EvalErrorKind, ParseError, ParseErrorKind};
-pub use ext::{Function, Macro, Options};
-pub use filter::{convert_legacy_filter, is_expression_filter, FilterError};
-pub use typ::Type;
-pub use value::{Projection, Value};
+pub use ext::Options;
+pub use filter::{
+    convert_legacy_filter, is_expression_filter, parse_filter, parse_filter_with, FilterError,
+    ParseFilterError,
+};
+pub use migrate::{migrate, MigrateError};
+pub use typ::{is_subtype, Type};
+pub use value::{format_number, FormatSection, Projection, Value};
 
-/// Parse a MapLibre expression from its JSON representation.
+/// Parse a MapLibre expression from its JSON representation — the counterpart
+/// of MapLibre's `createExpression`. Like it, this accepts only expressions:
+/// a bare object (including a legacy function object) is a
+/// [`BareObject`](ParseErrorKind::BareObject) error. To read a style value
+/// that may still be a legacy function or `{token}` string, use
+/// [`parse_property`], which converts it with the property's spec first.
 pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
     parse::parse(json, &Options::default())
+}
+
+/// Parse the value of a layout/paint property — a modern expression, a legacy
+/// function object, a `{token}` string, or a plain literal — the way MapLibre
+/// reads it: legacy forms are converted with the property's spec from the
+/// embedded style-spec reference (see [`migrate::migrate_property`]) and then
+/// parsed. The counterpart of MapLibre's `createPropertyExpression(value,
+/// propertySpec)`; `name` is the property name, e.g. `"line-width"`.
+pub fn parse_property(name: &str, json: &serde_json::Value) -> Result<Expr, ParseError> {
+    parse_property_with(name, json, &Options::default())
 }
 
 /// Whether `json` is a MapLibre *expression* — an array whose first element
@@ -64,8 +93,8 @@ pub fn parse(json: &serde_json::Value) -> Result<Expr, ParseError> {
 /// check that does **not** validate arity or arguments (`["get"]` is still an
 /// expression). `["literal", …]` counts as an expression. Objects, scalars,
 /// the empty array, and an array whose head is not a built-in operator (e.g. a
-/// font-name string) are not expressions. User macros / functions / natives
-/// (which are `Options`-scoped, not part of the grammar) are not considered.
+/// font-name string) are not expressions. User macros / expression functions /
+/// external functions (which are `Options`-scoped, not part of the grammar) are not considered.
 ///
 /// This is the check callers use to tell a data-driven property expression
 /// apart from a plain literal that merely happens to be an array.
@@ -77,9 +106,19 @@ pub fn is_expression(json: &serde_json::Value) -> bool {
 }
 
 /// Parse an expression with user [`Options`] (macros expand at parse time;
-/// function names are accepted as callable operators).
+/// expression-function and external-function names are accepted as callable
+/// operators).
 pub fn parse_with(json: &serde_json::Value, options: &Options) -> Result<Expr, ParseError> {
     parse::parse(json, options)
+}
+
+/// [`parse_property`] with user [`Options`].
+pub fn parse_property_with(
+    name: &str,
+    json: &serde_json::Value,
+    options: &Options,
+) -> Result<Expr, ParseError> {
+    parse::parse(&migrate::migrate_property(name, json), options)
 }
 
 /// Statically type-check a parsed expression, optionally against the type a
@@ -105,8 +144,9 @@ pub fn evaluate(expr: &Expr, ctx: &EvaluationContext) -> Result<Value, EvalError
     eval::eval(expr, ctx)
 }
 
-/// Evaluate with user [`Options`], so calls to user functions are dispatched to
-/// their (recursion-limited) bodies.
+/// Evaluate with user [`Options`], so calls to expression functions are
+/// dispatched to their (recursion-limited) bodies and calls to external
+/// functions to their closures.
 pub fn evaluate_with(
     expr: &Expr,
     ctx: &EvaluationContext,

@@ -12,8 +12,12 @@ pub struct Feature {
     pub geometry_type: Option<String>,
     /// The interactive feature state read by the `feature-state` operator.
     pub state: BTreeMap<String, Value>,
-    /// The feature geometry in global tile coordinates, grouped into rings /
-    /// lines (used by the `within` operator).
+    /// The feature geometry as raw `(lng, lat)` pairs in **degrees**, grouped
+    /// into rings / lines. Read by the `within` and `distance` operators, which
+    /// project these to tile coordinates themselves using
+    /// [`canonical`](EvaluationContext::canonical) — so do not pre-project
+    /// them. Feeding tile coordinates here is not an error; `within` silently
+    /// returns `false` and `distance` silently returns infinity.
     pub geometry: Vec<Vec<(f64, f64)>>,
 }
 

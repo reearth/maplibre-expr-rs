@@ -1,0 +1,1636 @@
+{
+  "background-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "color"
+  },
+  "background-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "background-pattern": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "resolvedImage"
+  },
+  "circle-blur": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "circle-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "circle-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "circle-pitch-alignment": {
+    "default": "viewport",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport"
+    ]
+  },
+  "circle-pitch-scale": {
+    "default": "map",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport"
+    ]
+  },
+  "circle-radius": {
+    "default": 5,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "circle-sort-key": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "circle-stroke-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "circle-stroke-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "circle-stroke-width": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "circle-translate": {
+    "default": [
+      0,
+      0
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "length": 2,
+    "type": "array",
+    "value": "number"
+  },
+  "circle-translate-anchor": {
+    "default": "map",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport"
+    ]
+  },
+  "color-relief-color": {
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "elevation"
+      ]
+    },
+    "type": "color"
+  },
+  "color-relief-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "fill-antialias": {
+    "default": true,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "fill-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "fill-extrusion-base": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "fill-extrusion-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "fill-extrusion-height": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "fill-extrusion-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "fill-extrusion-pattern": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "resolvedImage"
+  },
+  "fill-extrusion-translate": {
+    "default": [
+      0,
+      0
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "length": 2,
+    "type": "array",
+    "value": "number"
+  },
+  "fill-extrusion-translate-anchor": {
+    "default": "map",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport"
+    ]
+  },
+  "fill-extrusion-vertical-gradient": {
+    "default": true,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "fill-layer-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "global-state"
+      ]
+    },
+    "type": "number"
+  },
+  "fill-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "fill-outline-color": {
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "fill-pattern": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "resolvedImage"
+  },
+  "fill-sort-key": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "fill-translate": {
+    "default": [
+      0,
+      0
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "length": 2,
+    "type": "array",
+    "value": "number"
+  },
+  "fill-translate-anchor": {
+    "default": "map",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport"
+    ]
+  },
+  "heatmap-color": {
+    "default": [
+      "interpolate",
+      [
+        "linear"
+      ],
+      [
+        "heatmap-density"
+      ],
+      0,
+      "rgba(0, 0, 255, 0)",
+      0.1,
+      "royalblue",
+      0.3,
+      "cyan",
+      0.5,
+      "lime",
+      0.7,
+      "yellow",
+      1,
+      "red"
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "heatmap-density"
+      ]
+    },
+    "type": "color"
+  },
+  "heatmap-intensity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "heatmap-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "heatmap-radius": {
+    "default": 30,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "heatmap-weight": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "hillshade-accent-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "color"
+  },
+  "hillshade-exaggeration": {
+    "default": 0.5,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "hillshade-highlight-color": {
+    "default": "#FFFFFF",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "colorArray"
+  },
+  "hillshade-illumination-altitude": {
+    "default": 45,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "numberArray"
+  },
+  "hillshade-illumination-anchor": {
+    "default": "viewport",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport"
+    ]
+  },
+  "hillshade-illumination-direction": {
+    "default": 335,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "numberArray"
+  },
+  "hillshade-method": {
+    "default": "standard",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "standard",
+      "basic",
+      "combined",
+      "igor",
+      "multidirectional"
+    ]
+  },
+  "hillshade-shadow-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "colorArray"
+  },
+  "icon-allow-overlap": {
+    "default": false,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "icon-anchor": {
+    "default": "center",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "center",
+      "left",
+      "right",
+      "top",
+      "bottom",
+      "top-left",
+      "top-right",
+      "bottom-left",
+      "bottom-right"
+    ]
+  },
+  "icon-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "icon-halo-blur": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "icon-halo-color": {
+    "default": "rgba(0, 0, 0, 0)",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "icon-halo-width": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "icon-ignore-placement": {
+    "default": false,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "icon-image": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "tokens": true,
+    "type": "resolvedImage"
+  },
+  "icon-keep-upright": {
+    "default": false,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "icon-offset": {
+    "default": [
+      0,
+      0
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "length": 2,
+    "type": "array",
+    "value": "number"
+  },
+  "icon-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "icon-optional": {
+    "default": false,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "icon-overlap": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "never",
+      "always",
+      "cooperative"
+    ]
+  },
+  "icon-padding": {
+    "default": [
+      2
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "padding"
+  },
+  "icon-pitch-alignment": {
+    "default": "auto",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport",
+      "auto"
+    ]
+  },
+  "icon-rotate": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "icon-rotation-alignment": {
+    "default": "auto",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport",
+      "auto"
+    ]
+  },
+  "icon-size": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "icon-text-fit": {
+    "default": "none",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "none",
+      "width",
+      "height",
+      "both"
+    ]
+  },
+  "icon-text-fit-padding": {
+    "default": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "length": 4,
+    "type": "array",
+    "value": "number"
+  },
+  "icon-translate": {
+    "default": [
+      0,
+      0
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "length": 2,
+    "type": "array",
+    "value": "number"
+  },
+  "icon-translate-anchor": {
+    "default": "map",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport"
+    ]
+  },
+  "line-blur": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "line-cap": {
+    "default": "butt",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "butt",
+      "round",
+      "square"
+    ]
+  },
+  "line-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "line-dasharray": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "array",
+    "value": "number"
+  },
+  "line-gap-width": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "line-gradient": {
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "line-progress"
+      ]
+    },
+    "type": "color"
+  },
+  "line-join": {
+    "default": "miter",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "bevel",
+      "round",
+      "miter"
+    ]
+  },
+  "line-layer-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "global-state"
+      ]
+    },
+    "type": "number"
+  },
+  "line-miter-limit": {
+    "default": 2,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "line-offset": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "line-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "line-pattern": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "resolvedImage"
+  },
+  "line-round-limit": {
+    "default": 1.05,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "line-sort-key": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "line-translate": {
+    "default": [
+      0,
+      0
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "length": 2,
+    "type": "array",
+    "value": "number"
+  },
+  "line-translate-anchor": {
+    "default": "map",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport"
+    ]
+  },
+  "line-width": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "raster-brightness-max": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "raster-brightness-min": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "raster-contrast": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "raster-fade-duration": {
+    "default": 300,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "raster-hue-rotate": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "raster-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "raster-resampling": {
+    "default": "linear",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "linear",
+      "nearest"
+    ]
+  },
+  "raster-saturation": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "resampling": {
+    "default": "linear",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "linear",
+      "nearest"
+    ]
+  },
+  "symbol-avoid-edges": {
+    "default": false,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "symbol-placement": {
+    "default": "point",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "point",
+      "line",
+      "line-center"
+    ]
+  },
+  "symbol-sort-key": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "symbol-spacing": {
+    "default": 250,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "symbol-z-order": {
+    "default": "auto",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "auto",
+      "viewport-y",
+      "source"
+    ]
+  },
+  "text-allow-overlap": {
+    "default": false,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "text-anchor": {
+    "default": "center",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "center",
+      "left",
+      "right",
+      "top",
+      "bottom",
+      "top-left",
+      "top-right",
+      "bottom-left",
+      "bottom-right"
+    ]
+  },
+  "text-color": {
+    "default": "#000000",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "text-field": {
+    "default": "",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "tokens": true,
+    "type": "formatted"
+  },
+  "text-font": {
+    "default": [
+      "Open Sans Regular",
+      "Arial Unicode MS Regular"
+    ],
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "array",
+    "value": "string"
+  },
+  "text-halo-blur": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "text-halo-color": {
+    "default": "rgba(0, 0, 0, 0)",
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "color"
+  },
+  "text-halo-width": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "text-ignore-placement": {
+    "default": false,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "text-justify": {
+    "default": "center",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "auto",
+      "left",
+      "center",
+      "right"
+    ]
+  },
+  "text-keep-upright": {
+    "default": true,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "text-letter-spacing": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "text-line-height": {
+    "default": 1.2,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "text-max-angle": {
+    "default": 45,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "text-max-width": {
+    "default": 10,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "text-offset": {
+    "default": [
+      0,
+      0
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "length": 2,
+    "type": "array",
+    "value": "number"
+  },
+  "text-opacity": {
+    "default": 1,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature",
+        "feature-state"
+      ]
+    },
+    "type": "number"
+  },
+  "text-optional": {
+    "default": false,
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "boolean"
+  },
+  "text-overlap": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "never",
+      "always",
+      "cooperative"
+    ]
+  },
+  "text-padding": {
+    "default": 2,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "number"
+  },
+  "text-pitch-alignment": {
+    "default": "auto",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport",
+      "auto"
+    ]
+  },
+  "text-radial-offset": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "text-rotate": {
+    "default": 0,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "text-rotation-alignment": {
+    "default": "auto",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport",
+      "viewport-glyph",
+      "auto"
+    ]
+  },
+  "text-size": {
+    "default": 16,
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "number"
+  },
+  "text-transform": {
+    "default": "none",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "none",
+      "uppercase",
+      "lowercase"
+    ]
+  },
+  "text-translate": {
+    "default": [
+      0,
+      0
+    ],
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "length": 2,
+    "type": "array",
+    "value": "number"
+  },
+  "text-translate-anchor": {
+    "default": "map",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "map",
+      "viewport"
+    ]
+  },
+  "text-variable-anchor": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "array",
+    "value": "enum",
+    "values": [
+      "center",
+      "left",
+      "right",
+      "top",
+      "bottom",
+      "top-left",
+      "top-right",
+      "bottom-left",
+      "bottom-right"
+    ]
+  },
+  "text-variable-anchor-offset": {
+    "expression": {
+      "interpolated": true,
+      "parameters": [
+        "zoom",
+        "feature"
+      ]
+    },
+    "type": "variableAnchorOffsetCollection"
+  },
+  "text-writing-mode": {
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "zoom"
+      ]
+    },
+    "type": "array",
+    "value": "enum",
+    "values": [
+      "horizontal",
+      "vertical"
+    ]
+  },
+  "visibility": {
+    "default": "visible",
+    "expression": {
+      "interpolated": false,
+      "parameters": [
+        "global-state"
+      ]
+    },
+    "type": "enum",
+    "values": [
+      "visible",
+      "none"
+    ]
+  }
+}
