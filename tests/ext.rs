@@ -161,6 +161,39 @@ fn external_function_can_read_context() {
 }
 
 #[test]
+fn external_function_arity_is_checked_at_parse() {
+    let mut opts = Options::new();
+    opts.external("pair", 2, |_args, _ctx| Ok(Value::Null));
+    assert!(parse_with(&json!(["pair", 1]), &opts).is_err());
+    assert!(parse_with(&json!(["pair", 1, 2, 3]), &opts).is_err());
+    assert!(parse_with(&json!(["pair", 1, 2]), &opts).is_ok());
+}
+
+#[test]
+fn variadic_external_function_takes_any_number_of_arguments() {
+    let mut opts = Options::new();
+    // `None` arity: the closure gets however many arguments the call has.
+    opts.external("sum_all", None, |args, _ctx| {
+        Ok(Value::Number(
+            args.iter().filter_map(Value::as_number).sum(),
+        ))
+    });
+    let ctx = feature_with("n", Value::Number(10.0));
+    for (call, want) in [
+        (json!(["sum_all"]), 0.0),
+        (json!(["sum_all", 1]), 1.0),
+        (json!(["sum_all", 1, 2, ["get", "n"], ["*", 2, 3]]), 19.0),
+    ] {
+        let expr = parse_with(&call, &opts).unwrap();
+        assert_eq!(
+            evaluate_with(&expr, &ctx, &opts).unwrap(),
+            Value::Number(want),
+            "{call}"
+        );
+    }
+}
+
+#[test]
 fn options_is_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Options>();

@@ -148,11 +148,12 @@ fn parse_array(items: &[Json], ctx: &Ctx<'_>) -> Result<Expr> {
         });
     }
     if let Some((arity, _)) = ctx.opts.externals.get(op) {
-        if args.len() != *arity {
+        // `None` is variadic: any count goes, and the closure sees them all.
+        if let Some(expected) = arity.filter(|&n| n != args.len()) {
             return Err(ParseError::of(ParseErrorKind::ExtArgCount {
                 kind: "External function",
                 op: op.to_string(),
-                expected: *arity,
+                expected,
                 found: args.len(),
             }));
         }

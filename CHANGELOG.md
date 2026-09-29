@@ -4,6 +4,17 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Variadic external functions. `Options::external` now takes
+  `impl Into<Option<usize>>` for its arity: pass a count (`2`) as before for
+  an exact, parse-time-checked arity, or `None` to accept any number of
+  arguments, which the closure receives as-is. A variadic closure that needs a
+  minimum checks `args.len()` itself and returns an `EvalError`. Existing calls
+  such as `opts.external("f", 2, …)` compile unchanged.
+
 ## [0.5.2]
 
 ### Fixed

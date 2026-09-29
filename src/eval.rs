@@ -46,7 +46,7 @@ struct Evaluator<'a> {
     ctx: &'a EvaluationContext,
     scope: Vec<(String, Value)>,
     funcs: &'a HashMap<String, CompiledFn>,
-    externals: &'a HashMap<String, (usize, ExternalFn)>,
+    externals: &'a HashMap<String, (Option<usize>, ExternalFn)>,
     depth: usize,
 }
 

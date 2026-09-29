@@ -72,8 +72,8 @@ pub(crate) struct CompiledFn {
 pub struct Options {
     pub(crate) macros: HashMap<String, Macro>,
     pub(crate) expr_fns: HashMap<String, ExprFn>,
-    /// name -> (arity, closure)
-    pub(crate) externals: HashMap<String, (usize, ExternalFn)>,
+    /// name -> (arity, closure); `None` accepts any number of arguments.
+    pub(crate) externals: HashMap<String, (Option<usize>, ExternalFn)>,
     /// Expression functions with their bodies parsed, built on first use and
     /// reset by every registration (bodies may refer to names registered
     /// later, including their own for recursion, so they can't be parsed
@@ -122,13 +122,23 @@ impl Options {
         self
     }
 
-    /// Register an external Rust function of the given arity. The closure
-    /// receives the evaluated argument values and the evaluation context.
-    pub fn external<F>(&mut self, name: impl Into<String>, arity: usize, f: F) -> &mut Options
+    /// Register an external Rust function. The closure receives the evaluated
+    /// argument values and the evaluation context.
+    ///
+    /// `arity` is either an exact argument count (`2`), checked at parse time,
+    /// or `None` for a variadic function that accepts any number of arguments;
+    /// a variadic closure checks `args.len()` itself if it needs a minimum.
+    pub fn external<F>(
+        &mut self,
+        name: impl Into<String>,
+        arity: impl Into<Option<usize>>,
+        f: F,
+    ) -> &mut Options
     where
         F: Fn(&[Value], &EvaluationContext) -> Result<Value, EvalError> + Send + Sync + 'static,
     {
-        self.externals.insert(name.into(), (arity, Arc::new(f)));
+        self.externals
+            .insert(name.into(), (arity.into(), Arc::new(f)));
         self.compiled = OnceLock::new();
         self
     }
