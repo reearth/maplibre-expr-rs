@@ -299,12 +299,45 @@ fn load_known_failures() -> HashSet<String> {
     let Ok(contents) = fs::read_to_string(path) else {
         return HashSet::new();
     };
-    contents
+    let mut set: HashSet<String> = contents
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(String::from)
-        .collect()
+        .collect();
+    set.extend(needs_cldr_collation().iter().map(|s| String::from(*s)));
+    set
+}
+
+/// Fixtures whose expected ordering comes from CLDR tailoring, so they only
+/// hold with the `collator` feature on. With it off, `collator` expressions
+/// still parse and type-check — the remaining `collator/*` fixtures (the
+/// compile errors, and the cases that agree with code-point order) keep
+/// running — but these need the ICU data and are reported as ignored.
+#[cfg(feature = "collator")]
+fn needs_cldr_collation() -> &'static [&'static str] {
+    &[]
+}
+
+#[cfg(not(feature = "collator"))]
+fn needs_cldr_collation() -> &'static [&'static str] {
+    &[
+        "collator/accent-equals-de",
+        "collator/accent-lt-en",
+        "collator/accent-not-equals-en",
+        "collator/base-equals-en",
+        "collator/base-gt-en",
+        "collator/case-lteq-en",
+        "collator/case-not-equals-en",
+        "collator/case-omitted-en",
+        "collator/diacritic-omitted-en",
+        "collator/variable-equals",
+        "collator/variable-gt",
+        "collator/variable-lteq",
+        "collator/variable-not-equals",
+        "collator/variant-gteq-en",
+        "equal/collator-value",
+    ]
 }
 
 /// Recursively find every `test.json`, naming each by its path relative to the

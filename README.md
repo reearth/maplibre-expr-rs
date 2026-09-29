@@ -1,4 +1,4 @@
-# maplibre-expr
+# maplibre-expr-rs
 
 [![crates.io](https://img.shields.io/crates/v/maplibre-expr.svg)](https://crates.io/crates/maplibre-expr)
 [![docs.rs](https://img.shields.io/docsrs/maplibre-expr)](https://docs.rs/maplibre-expr)
@@ -8,26 +8,24 @@ aims to behave **exactly** like the reference implementation — not just the sa
 results, but the same compile errors, in the same places.
 
 - 🎯 **Exhaustive compatibility.** Passes the **entire** upstream conformance
-  suite — **563/563** fixtures, zero skipped. Every operator, legacy
-  stop-function, type coercion, and edge case behaves like `maplibre-gl-js`.
+  suite — **563/563** fixtures, zero skipped — including legacy stop functions,
+  type coercion, and every edge case.
 - 🧭 **Byte-exact errors.** Compile- and eval-error messages match MapLibre's
-  wording **character-for-character**, and each compile error carries the same
-  location `key` (e.g. `"[4][0]"`). The test harness enforces this, so the
-  parity can't silently regress.
+  wording **character-for-character**, with the same location `key`
+  (e.g. `"[4][0]"`). The test harness enforces this.
 - 🦀 **Pure Rust, tiny surface.** No rendering, no I/O, no C deps — just
-  `serde_json` and a pure-Rust ICU for locale-aware collation. Works anywhere
-  Rust does.
-- 🧱 **Real pipeline.** `parse` → optional static `typecheck` (the same
-  type-inference/coercion pass MapLibre runs) → `evaluate` against a
-  zoom + feature context. Full coverage: `match`/`step`/`interpolate`, `format`,
-  `collator`, `within`/`distance` geometry, `number-format`, images, and more.
-- 🔌 **Extensible.** Plug in your own operators as macros, recursive functions,
-  or native Rust closures — without forking the language.
+  `serde_json`, plus a pure-Rust ICU for `collator` (optional, see
+  [Feature flags](#feature-flags)). Works anywhere Rust does, including wasm.
+- 🧱 **Real pipeline.** `parse` → static `typecheck` (the same inference and
+  coercion pass MapLibre runs) → `evaluate` against a zoom + feature context.
+- 🗺️ **Real styles, as they are.** `migrate` ports MapLibre's style migration,
+  with the style-spec reference embedded: hand it a style still using stop
+  functions, `{token}` strings and legacy filters (the official demo tiles do)
+  and get the same expressions the reference implementation produces.
+- 🔌 **Extensible.** Plug in your own operators as macros, expression
+  functions, or external Rust closures — without forking the language.
 
-It turns a MapLibre expression (JSON such as `["*", ["get", "x"], 2]`) into a
-typed tree with `parse`, optionally validates it with `typecheck`, then
-evaluates that tree against an `EvaluationContext` (zoom + feature) with
-`evaluate`.
+## Quick start
 
 ```rust
 use maplibre_expr::{parse, evaluate, EvaluationContext, Feature, Value};
@@ -45,198 +43,240 @@ let ctx = EvaluationContext::new().with_feature(Feature {
 assert_eq!(evaluate(&expr, &ctx).unwrap(), Value::Number(42.0));
 ```
 
-## Type checking
+## Usage
 
-`typecheck(&expr, expected)` runs a static pass that mirrors the compile-time
-validation MapLibre performs while parsing: it infers each node's result type,
-checks operator argument types, and reconciles against an optional expected
-type (assert/coerce/subtype). It rejects, for example, comparisons between
-incompatible types, malformed `match` branches, non-interpolatable
-`interpolate` outputs, bad `array` item-type/length arguments, and misuse of
-`zoom` outside a single top-level curve.
+### Pipeline: parse, typecheck, evaluate
 
-**Errors are semantic *and* match MapLibre's wording.** `ParseError`/`EvalError`
-carry a `kind` ([`ParseErrorKind`]/[`EvalErrorKind`]) you can match on —
-`UnknownExpression`, `WrongArgCount`, `TypeMismatch`, `NotComparable`,
-`CannotCompare`, `NotInterpolatable`, `UnboundVariable`, `Zoom`, … — with a
-`Display` "printer" rendering the message. `ParseError` also carries a `key`, the
-location path of the offending sub-expression (e.g. `"[2]"` or `"[4][0]"`),
-collected as the error bubbles up. Both the message text and the location key
-match the reference implementation **byte-for-byte** across the conformance
-suite, and the harness enforces this (see [Conformance testing](#conformance-testing)).
-Every intrinsic error has a dedicated variant (`CouldNotParse`,
-`ArrayIndexOutOfBounds`, `InvalidRgba`, `BranchLabels*`, `ExpectedEvenArgs`,
-`InterpolationTypeArray`, …). The `Other(String)` kind is reserved for
-message-only cases with no fixed category: the user-thrown `["error", msg]`
-operator, and runtime errors surfaced by compile-time constant folding.
+`parse` turns expression JSON into an `Expr` tree. `typecheck(&expr, expected)`
+then runs the static pass MapLibre performs at compile time: it infers each
+node's result type, checks operator argument types, and reconciles against an
+optional expected type (assert / coerce / subtype). It rejects, for example,
+comparisons between incompatible types, malformed `match` branches,
+non-interpolatable `interpolate` outputs, and `zoom` outside a single top-level
+curve. `evaluate` finally runs the tree against an `EvaluationContext` — zoom,
+feature properties, geometry, and so on.
 
-## Extensions: macros and functions
+### Errors
 
-Beyond the standard operators, you can plug your own operators in through
-[`Options`], passed to `parse_with` / `evaluate_with`:
+`ParseError` / `EvalError` carry a `kind` you can match on (`UnknownExpression`,
+`WrongArgCount`, `TypeMismatch`, `NotComparable`, `UnboundVariable`, …), and
+`Display` renders MapLibre's exact message. `ParseError` also carries a `key`:
+the location of the offending sub-expression, such as `"[2]"` or `"[4][0]"`,
+collected as the error bubbles up. Both the message and the key match the
+reference implementation byte-for-byte across the conformance suite.
 
-- A **macro** expands at parse time into a `let` binding its parameters to the
-  call arguments — zero runtime cost, but it cannot recurse (a recursion-depth
-  limit rejects cyclic macros).
-- A **function** stays a call in the tree and runs at evaluation time, so it
-  *may* recurse; a call-depth limit turns runaway recursion into an error
-  instead of a stack overflow.
-- A **native function** ([`Options::native`]) is a Rust closure invoked with
-  the evaluated arguments (and the context), so results can be computed
-  dynamically. `Options` is `Send + Sync`, so the registry can be shared across
-  threads (native closures must be `Send + Sync`).
+Every intrinsic error has a dedicated variant. `Other(String)` is reserved for
+message-only cases: the user-thrown `["error", msg]` operator, runtime errors
+surfaced by compile-time constant folding, and expression-function bodies that
+fail to parse.
+
+### Legacy inputs
+
+Real-world styles still use three pre-expression forms: *function objects*
+such as `{"type": "exponential", "property": "x", "stops": [...]}`, `{token}`
+strings in `text-field` / `icon-image`, and *legacy filters* with bare property
+names like `["==", "class", "primary"]`. MapLibre converts all of them to
+expressions before evaluating, and so can this crate.
+
+**Migrate a whole style** with `migrate`, the port of maplibre-style-spec's
+`migrate`. It walks every layer and rewrites filters, function objects and
+token strings using the embedded style-spec reference — the property's type,
+whether it interpolates, whether it takes tokens — so the output is exactly
+what the reference implementation produces. The MapLibre demo style is
+checked against `gl-style-migrate`'s output in the test suite.
+
+```rust
+use maplibre_expr::{migrate, parse, evaluate, EvaluationContext};
+use serde_json::json;
+
+let style = json!({
+    "version": 8,
+    "layers": [{
+        "id": "label", "type": "symbol", "source": "s",
+        "layout": {
+            "text-field": "{name}",
+            "text-size": {"stops": [[2, 10], [6, 16]]},
+        },
+        "filter": ["!=", "name", ""],
+    }],
+});
+let style = migrate(&style).unwrap();
+let layer = &style["layers"][0];
+assert_eq!(layer["layout"]["text-field"], json!(["to-string", ["get", "name"]]));
+assert_eq!(
+    layer["layout"]["text-size"],
+    json!(["interpolate", ["linear"], ["zoom"], 2, 10, 6, 16])
+);
+assert_eq!(layer["filter"], json!(["!=", ["get", "name"], ""]));
+
+let size = parse(&layer["layout"]["text-size"]).unwrap();
+let ctx = EvaluationContext::new().with_zoom(4.0);
+assert_eq!(evaluate(&size, &ctx).unwrap(), maplibre_expr::Value::Number(13.0));
+```
+
+`migrate::migrate_property(name, value)` does the same for one layout/paint
+value, and `migrate_with` / `migrate_property_with` accept a custom reference
+(a fork of the spec, say). Only `version: 8` styles are handled; the ancient
+v7 → v8 rewrite is not ported.
+
+**Parse a single property value** with `parse_property(name, value)`, the
+counterpart of MapLibre's `createPropertyExpression(value, propertySpec)`: it
+converts a function object or token string with the property's spec from the
+embedded reference, then parses, so one value comes out exactly as it would
+from a migrated style.
+
+```rust
+use maplibre_expr::{parse_property, evaluate, EvaluationContext, Value};
+use serde_json::json;
+
+let width = parse_property("line-width", &json!({"stops": [[2, 10], [6, 16]]})).unwrap();
+let ctx = EvaluationContext::new().with_zoom(4.0);
+assert_eq!(evaluate(&width, &ctx).unwrap(), Value::Number(13.0)); // interpolated
+```
+
+`parse` itself, like MapLibre's `createExpression`, accepts only expressions
+and rejects a bare object with the same `Bare objects invalid` error — there
+is no spec-less guessing. `filter::parse_filter` converts a legacy filter
+before parsing exactly as MapLibre's `createFilter` does (no spec is
+involved). The lower-level pieces are public too: `convert::convert_function`,
+`convert::convert_token_string`, and `filter::convert_legacy_filter`, which
+reproduces legacy filter semantics faithfully (strictly-typed comparisons that
+yield `false` on a type mismatch, the `$type` / `$id` keys, and the `typeof`
+guards that keep one `any` term from erroring out its siblings).
+
+### Extensions
+
+You can plug your own operators in through `Options`, passed to `parse_with` /
+`evaluate_with`. A tree that uses none of them parses and evaluates identically
+with or without the options — this is not a new dialect.
+
+| Kind | Registered with | Body | Runs | Recursion | Result tree |
+| --- | --- | --- | --- | --- | --- |
+| **Macro** | `Options::macro_def` | expression JSON | expands at parse time into a `let` | no (depth-limited) | plain MapLibre expression |
+| **Expression function** | `Options::expr_fn` | expression JSON | at evaluation time | yes (depth-limited) | contains the custom call |
+| **External function** | `Options::external` | Rust closure | at evaluation time | n/a | contains the custom call |
+
+**Prefer macros.** Because a macro disappears into a standard expression, the
+result needs no options to evaluate, is fully type-checked and constant-folded,
+and could be handed to any other MapLibre implementation. Reach for an
+expression function only when you need recursion, and for an external function
+when the logic can't be written as an expression at all. Calls to either are
+opaque to `typecheck` (typed as `value`). Expression-function bodies are parsed
+once per `Options`, on first use, and cached until the next registration.
 
 ```rust
 use maplibre_expr::{parse_with, evaluate_with, EvaluationContext, Options, Value};
 use serde_json::json;
 
 let mut opts = Options::new();
+// Macro: expands to ["let", "x", <arg>, ["*", ["var", "x"], 2]].
 opts.macro_def("double", vec!["x".into()], json!(["*", ["var", "x"], 2]));
-opts.function(
+// Expression function: recursive, so it can't be a macro.
+opts.expr_fn(
     "sum",
     vec!["n".into()],
     json!(["case", ["<=", ["var", "n"], 0], 0,
            ["+", ["var", "n"], ["sum", ["-", ["var", "n"], 1]]]]),
 );
-
-let expr = parse_with(&json!(["sum", ["double", 3]]), &opts).unwrap();
-let out = evaluate_with(&expr, &EvaluationContext::new(), &opts).unwrap();
-assert_eq!(out, Value::Number(21.0)); // sum(6)
-```
-
-A **native function** is just a Rust `fn`/closure — it receives the already
-evaluated arguments plus the context, so it can compute anything:
-
-```rust
-use maplibre_expr::{parse_with, evaluate_with, EvaluationContext, Options, Value};
-use serde_json::json;
-
-let mut opts = Options::new();
-opts.native("hypot", 2, |args, _ctx| {
+// External function: a Rust closure over the evaluated arguments and context.
+opts.external("hypot", 2, |args, _ctx| {
     let x = args[0].as_number().unwrap_or(0.0);
     let y = args[1].as_number().unwrap_or(0.0);
     Ok(Value::Number(x.hypot(y)))
 });
 
-let expr = parse_with(&json!(["hypot", 3, 4]), &opts).unwrap();
+let expr = parse_with(&json!(["hypot", ["sum", ["double", 3]], 28]), &opts).unwrap();
 let out = evaluate_with(&expr, &EvaluationContext::new(), &opts).unwrap();
-assert_eq!(out, Value::Number(5.0));
+assert_eq!(out, Value::Number(35.0)); // hypot(sum(6) = 21, 28)
 ```
 
-These are parser/runtime *options*, not a new dialect — a tree without any
-custom operators parses and evaluates identically with or without them.
+`Options` is `Send + Sync` (external closures must be too), so one registry can
+be shared across threads.
 
-[`Options`]: https://docs.rs/maplibre-expr
+## Feature flags
 
-## Legacy function objects
+| Feature | Default | Effect |
+| --- | --- | --- |
+| `collator` | ✅ | Locale-aware `collator` comparisons via [`icu_collator`]'s embedded CLDR data. |
 
-Before expressions existed, styling was driven by *function objects* —
-`{"type": "exponential", "property": "x", "stops": [...]}` and friends.
-`parse` accepts these transparently: hand it either a modern expression or a
-legacy function object and it converts the latter to the equivalent modern
-expression (`interpolate` / `step` / `match` / `case` / …) before parsing — a
-port of maplibre-style-spec's `convert.ts`, so the result matches the reference.
+The CLDR tables are the crate's only heavyweight dependency — roughly 1.1 MB of
+static data and ~28 extra crates. If your styles don't use `collator` (most
+don't), turn the feature off, especially for wasm:
 
-```rust
-use maplibre_expr::{parse, evaluate, EvaluationContext};
-use serde_json::json;
-
-// A zoom function → ["interpolate", ["exponential", 2], ["zoom"], 0, 0, 10, 100].
-let expr = parse(&json!({
-    "type": "exponential", "base": 2, "stops": [[0, 0], [10, 100]],
-})).unwrap();
-let out = evaluate(&expr, &EvaluationContext::new().with_zoom(10.0)).unwrap();
+```toml
+maplibre-expr = { version = "0.5", default-features = false }
 ```
 
-Conversion is on by default; turn it off with
-[`Options::convert_legacy(false)`][`Options`] to reject bare objects instead.
-The [`convert`] module is also public: call `convert::convert_function(params,
-spec)` directly when you have the property's style spec, which unlocks the
-spec-dependent cases (`{token}` expansion, `enum`/`array`/`color` identity
-functions, and the `exponential`-vs-`interval` default). The transparent path
-has no spec, so it relies on the object's own fields.
-
-[`convert`]: https://docs.rs/maplibre-expr
-
-## Legacy filters
-
-Layer filters have the same legacy/modern split. Old styles wrote filters as
-nested arrays with a *bare* property name — `["==", "class", "primary"]`,
-`["in", "type", "a", "b"]`, `["all", …]` — while modern filters are ordinary
-boolean expressions (`["==", ["get", "class"], "primary"]`). The [`filter`]
-module ports maplibre-style-spec's `feature_filter`:
-
-```rust
-use maplibre_expr::filter::{convert_legacy_filter, is_expression_filter};
-use serde_json::json;
-
-let legacy = json!(["all", ["!=", "name", "International Date Line"]]);
-assert!(!is_expression_filter(&legacy));
-
-// → ["!=", ["get", "name"], "International Date Line"]
-let expr = convert_legacy_filter(&legacy).unwrap();
-```
-
-`is_expression_filter` tells the two apart, and `convert_legacy_filter` returns
-the equivalent expression as raw JSON (an input that already *is* an expression
-is returned unchanged). The conversion faithfully reproduces legacy semantics:
-strictly-typed comparisons that yield `false` on a type mismatch, the `$type` /
-`$id` special keys (`["geometry-type"]` / `["id"]`), and the preflight `typeof`
-guards that keep an `any` term from erroring out its siblings.
-
-[`filter`]: https://docs.rs/maplibre-expr
-
-## Implementation notes
-
-- **`distance` uses a brute-force pairwise scan** rather than MapLibre's
-  bounding-volume hierarchy. The minimum distance is independent of traversal
-  order, so the result is identical; the trade-off is scalability — this is
-  `O(n·m)` in the vertex counts, where MapLibre's BVH prunes distant pairs.
-  For tile-sized geometry the difference is negligible, and the code is far
-  simpler. (If you need large-geometry performance, this is the place to add a
-  spatial index.)
-- Feature coordinates are round-tripped through tile coordinates before
-  `distance`/`within`, matching MapLibre's quantization so results agree.
-- **`collator` uses CLDR collation via [`icu_collator`]** (pure Rust), so
-  locale-aware ordering works for any locale — Intl's `sensitivity` maps to an
-  ICU strength plus case level.
+This does **not** change what the crate accepts: `["collator", …]` still parses
+and type-checks identically, and `resolved-locale` still works. Only the
+comparison changes — the locale and the `case-sensitive` / `diacritic-sensitive`
+options are ignored and operands compare in code-point order. The 15 fixtures
+that depend on CLDR tailoring are reported as *ignored* in that configuration.
 
 [`icu_collator`]: https://crates.io/crates/icu_collator
 
-## Conformance testing
+## Development
 
-The crate is validated against a **vendored snapshot** of the upstream
-[`maplibre-style-spec`][spec] expression fixtures (`tests/fixtures/expression`,
-see `tests/fixtures/ATTRIBUTION.md`). The harness in `tests/spec.rs` turns
-**each fixture directory into one libtest case** (via `libtest-mimic`), so a
-run reads like:
+### Conformance testing
+
+The crate is validated against a vendored snapshot of the upstream
+[`maplibre-style-spec`][spec] expression fixtures (`tests/fixtures/expression`;
+see `ATTRIBUTION.md` there). `tests/spec.rs` turns each fixture directory into
+one libtest case:
 
 ```
 cargo test --test spec
 # test result: ok. 563 passed; 0 failed; 0 ignored; ...
 ```
 
-For every fixture it compiles the `expression` (`parse` + `typecheck`, with the
-expected type taken from the fixture's `propertySpec`; legacy stop-function
-objects are converted first), checking success vs. compile error, then evaluates
-it against each `input` and compares to the expected `output`, matching
-`{ "error": ... }` outputs against evaluation errors. Numbers are compared with
-the same 6-significant-figure `stripPrecision` rule the upstream suite uses;
-colors are compared premultiplied, matching MapLibre's internal `Color`.
+For every fixture it compiles the expression (`parse` + `typecheck`, with the
+expected type from the fixture's `propertySpec`), checks success vs. compile
+error, then evaluates each `input` and compares to the expected `output`.
+Numbers use the upstream 6-significant-figure rule; colors compare
+premultiplied. For error fixtures it also asserts **parity**: our message text
+and location `key` must equal the fixture's exactly. `PARITY=1` prints a
+coverage report instead of the pass/fail run.
 
-For error fixtures it also asserts **error parity**: our `ParseError`/`EvalError`
-message text and (for compile errors) the location `key` must match the
-fixture's `expected.compiled.errors[0]` / `outputs[i].error` exactly. Running
-the harness with `PARITY=1` prints a coverage report of message/key agreement
-instead of the pass/fail run.
+The harness verifies `compiled.result`, the per-input `outputs`, and error
+parity. It does not assert the other static-analysis fields (`type`,
+`isFeatureConstant`, `isZoomConstant`). Refresh the snapshot with
+`tests/refresh_fixtures.sh [git-ref]`.
 
-**Scope note:** the harness verifies `compiled.result` (success/error), the
-per-input `outputs`, and error message/key parity. It does **not** assert the
-other static-analysis fields (`type`, `isFeatureConstant`, `isZoomConstant`).
+### Implementation notes
 
-Refresh the vendored snapshot with `tests/refresh_fixtures.sh [git-ref]`.
+- **`distance` is a brute-force pairwise scan**, not MapLibre's bounding-volume
+  hierarchy. The minimum distance doesn't depend on traversal order, so results
+  are identical; the cost is `O(n·m)` in vertex counts, which is negligible for
+  tile-sized geometry. Add a spatial index here if you need more.
+- Feature coordinates round-trip through tile coordinates before `distance` /
+  `within`, matching MapLibre's quantization.
+- **`collator` uses CLDR collation via [`icu_collator`]**; Intl's `sensitivity`
+  maps to an ICU strength plus case level, as `icu_collator` documents
+  (base → primary, accent → secondary, case → primary + case level,
+  variant → tertiary). Upstream additionally asks Intl for `usage: 'search'`,
+  which ICU4X's compiled data does not carry; German is rewritten to the
+  phonebook collation to stand in for it, which matches node's German search
+  collation on every pair tested. Japanese kana at `variant` sensitivity are
+  the known residual: the search collation separates hiragana from katakana,
+  the standard one does not.
+- **`number-format` always formats in `en-US`**, ignoring the `locale` option
+  that upstream forwards to `Intl.NumberFormat`. Everything else about it —
+  currency and unit styles, the ECMA-402 fraction-digit rules, `NaN` and `∞` —
+  follows `Intl.NumberFormat('en-US', …)`.
+
+## Community
+
+`maplibre-expr-rs` is part of the [MapLibre](https://maplibre.org) ecosystem.
+Discussion happens in the `#maplibre` channel on the OSM-US Slack — join with
+the [OSM-US Slack invite](https://slack.openstreetmap.us).
+
+Please also see our [Code of Conduct](CODE_OF_CONDUCT.md), the
+[Contributing guide](CONTRIBUTING.md), and the
+[Security policy](SECURITY.md).
 
 ## License
+
+Copyright (c) 2026 MapLibre contributors
 
 Licensed under either of
 
