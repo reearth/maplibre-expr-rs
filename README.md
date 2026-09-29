@@ -190,6 +190,15 @@ let out = evaluate_with(&expr, &EvaluationContext::new(), &opts).unwrap();
 assert_eq!(out, Value::Number(35.0)); // hypot(sum(6) = 21, 28)
 ```
 
+An external function's arity is an exact count checked at parse time, or
+`None` for a variadic one that takes any number of arguments:
+
+```rust
+opts.external("sum_all", None, |args, _ctx| {
+    Ok(Value::Number(args.iter().filter_map(Value::as_number).sum()))
+});
+```
+
 `Options` is `Send + Sync` (external closures must be too), so one registry can
 be shared across threads.
 
