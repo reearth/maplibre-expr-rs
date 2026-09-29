@@ -31,7 +31,7 @@ jobs:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -46,11 +46,11 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo build --all-features --verbose
-      - run: cargo test --all-features --verbose
+      - run: cargo build --locked --all-features --verbose
+      - run: cargo test --locked --all-features --verbose
       # The `collator` feature is optional; keep the ICU-free build compiling
       # and its fixtures green (the CLDR-dependent ones report as ignored).
-      - run: cargo test --no-default-features --verbose
+      - run: cargo test --locked --no-default-features --verbose
 
   doc:
     name: rustdoc
@@ -63,4 +63,4 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo doc --all-features --no-deps
+      - run: cargo doc --locked --all-features --no-deps
