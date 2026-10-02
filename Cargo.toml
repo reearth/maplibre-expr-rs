@@ -36,6 +36,11 @@ serde_json = "1"
 # build the datetime, segmenter, calendar, list and plurals data crates.
 icu_collator = { version = "2", features = ["compiled_data"], optional = true }
 icu_locale_core = { version = "2", optional = true }
+# Transcendental functions (`sin`, `ln`, `^`, colour-space curves, …) come from
+# here rather than `f64`'s methods, which call the platform's libm natively and
+# a different implementation on wasm. This keeps results bit-identical on every
+# host; `clippy.toml` forbids the std methods.
+libm = "0.2"
 
 [dev-dependencies]
 libtest-mimic = "0.8"

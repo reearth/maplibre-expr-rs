@@ -32,7 +32,7 @@ impl Ruler {
         let e2 = FE * (2.0 - FE);
         let rad = std::f64::consts::PI / 180.0;
         let m = rad * RE * 1000.0;
-        let coslat = (lat * rad).cos();
+        let coslat = libm::cos(lat * rad);
         let w2 = 1.0 / (1.0 - e2 * (1.0 - coslat * coslat));
         let w = w2.sqrt();
         Ruler {

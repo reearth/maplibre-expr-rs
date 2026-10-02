@@ -4,6 +4,21 @@ All notable changes to this crate are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Transcendental functions now come from the pure-Rust `libm` crate instead of
+  `f64`'s methods, so an expression evaluates to the same bits on every host,
+  native and WebAssembly alike. The std methods call the platform's libm
+  natively and a different implementation on wasm, and the two can disagree in
+  the last bit. This covers the `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
+  `ln`, `log2`, `log10` and `^` operators, `exponential` interpolation, the
+  Lab/HCL colour-space conversions behind `interpolate-lab` and
+  `interpolate-hcl`, and the projection and ruler math in `within` and
+  `distance`. Results may differ from earlier releases in the last bit.
+  A `clippy.toml` now forbids the std methods.
+
 ## [0.5.3]
 
 ### Added

@@ -478,22 +478,22 @@ impl Evaluator<'_> {
             "^" => {
                 let a = self.eval_number(&args[0])?;
                 let b = self.eval_number(&args[1])?;
-                Ok(Value::Number(a.powf(b)))
+                Ok(Value::Number(libm::pow(a, b)))
             }
             "abs" => self.map_num(args, f64::abs),
             "ceil" => self.map_num(args, f64::ceil),
             "floor" => self.map_num(args, f64::floor),
             "round" => self.map_num(args, f64::round),
             "sqrt" => self.map_num(args, f64::sqrt),
-            "sin" => self.map_num(args, f64::sin),
-            "cos" => self.map_num(args, f64::cos),
-            "tan" => self.map_num(args, f64::tan),
-            "asin" => self.map_num(args, f64::asin),
-            "acos" => self.map_num(args, f64::acos),
-            "atan" => self.map_num(args, f64::atan),
-            "ln" => self.map_num(args, f64::ln),
-            "log2" => self.map_num(args, f64::log2),
-            "log10" => self.map_num(args, f64::log10),
+            "sin" => self.map_num(args, libm::sin),
+            "cos" => self.map_num(args, libm::cos),
+            "tan" => self.map_num(args, libm::tan),
+            "asin" => self.map_num(args, libm::asin),
+            "acos" => self.map_num(args, libm::acos),
+            "atan" => self.map_num(args, libm::atan),
+            "ln" => self.map_num(args, libm::log),
+            "log2" => self.map_num(args, libm::log2),
+            "log10" => self.map_num(args, libm::log10),
             "min" => self.fold_num(args, f64::INFINITY, f64::min),
             "max" => self.fold_num(args, f64::NEG_INFINITY, f64::max),
             "error" => Err(EvalError::new(self.eval_string(&args[0])?)),
@@ -1661,7 +1661,7 @@ fn interpolation_factor(kind: InterpKind, x: f64, lo: f64, hi: f64) -> f64 {
             if (base - 1.0).abs() < f64::EPSILON {
                 (x - lo) / span
             } else {
-                (base.powf(x - lo) - 1.0) / (base.powf(span) - 1.0)
+                (libm::pow(base, x - lo) - 1.0) / (libm::pow(base, span) - 1.0)
             }
         }
         InterpKind::CubicBezier(x1, y1, x2, y2) => {
