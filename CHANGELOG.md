@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
+### Fixed
 
 - Transcendental functions now come from the pure-Rust `libm` crate instead of
   `f64`'s methods, so an expression evaluates to the same bits on every host,
