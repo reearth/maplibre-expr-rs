@@ -439,13 +439,13 @@ fn rgb2xyz(x: f64) -> f64 {
     if x <= 0.04045 {
         x / 12.92
     } else {
-        ((x + 0.055) / 1.055).powf(2.4)
+        libm::pow((x + 0.055) / 1.055, 2.4)
     }
 }
 
 fn xyz2lab(t: f64) -> f64 {
     if t > T3 {
-        t.cbrt()
+        libm::cbrt(t)
     } else {
         t / T2 + T0
     }
@@ -463,7 +463,7 @@ fn xyz2rgb(x: f64) -> f64 {
     let x = if x <= 0.00304 {
         12.92 * x
     } else {
-        1.055 * x.powf(1.0 / 2.4) - 0.055
+        1.055 * libm::pow(x, 1.0 / 2.4) - 0.055
     };
     x.clamp(0.0, 1.0)
 }
@@ -481,7 +481,7 @@ fn rgb_to_hcl(rgb: [f64; 4]) -> [f64; 4] {
     let [l, a, b, alpha] = rgb_to_lab(rgb);
     let c = (a * a + b * b).sqrt();
     let h = if (c * 10000.0).round() != 0.0 {
-        constrain_angle(b.atan2(a).to_degrees())
+        constrain_angle(libm::atan2(b, a).to_degrees())
     } else {
         f64::NAN
     };
@@ -490,7 +490,8 @@ fn rgb_to_hcl(rgb: [f64; 4]) -> [f64; 4] {
 
 fn hcl_to_rgb([h, c, l, alpha]: [f64; 4]) -> [f64; 4] {
     let h = if h.is_nan() { 0.0 } else { h.to_radians() };
-    lab_to_rgb([l, h.cos() * c, h.sin() * c, alpha])
+    let (sin, cos) = libm::sincos(h);
+    lab_to_rgb([l, cos * c, sin * c, alpha])
 }
 
 /// The CSS Color 4 named colors, copied verbatim from the `namedColors` table

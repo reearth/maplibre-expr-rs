@@ -14,9 +14,9 @@ pub(crate) fn tile_coord(lng: f64, lat: f64, z: u32) -> P {
     let mx = (180.0 + lng) / 360.0;
     let my = (180.0
         - (180.0 / std::f64::consts::PI)
-            * (std::f64::consts::PI / 4.0 + (lat * std::f64::consts::PI) / 360.0)
-                .tan()
-                .ln())
+            * libm::log(libm::tan(
+                std::f64::consts::PI / 4.0 + (lat * std::f64::consts::PI) / 360.0,
+            )))
         / 360.0;
     let tiles = 2f64.powi(z as i32);
     ((mx * tiles * EXTENT).round(), (my * tiles * EXTENT).round())
@@ -29,7 +29,7 @@ pub(crate) fn lnglat_from_tile(gx: f64, gy: f64, z: u32) -> P {
     let mx = gx / EXTENT / tiles;
     let my = gy / EXTENT / tiles;
     let lng = mx * 360.0 - 180.0;
-    let lat = (360.0 / PI) * ((180.0 - my * 360.0) * PI / 180.0).exp().atan() - 90.0;
+    let lat = (360.0 / PI) * libm::atan(libm::exp((180.0 - my * 360.0) * PI / 180.0)) - 90.0;
     (lng, lat)
 }
 

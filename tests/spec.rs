@@ -738,7 +738,7 @@ fn strip_precision(x: f64, sig: i32) -> f64 {
     if x == 0.0 {
         return 0.0;
     }
-    let multiplier = 10f64.powf((sig as f64 - x.abs().log10().ceil()).max(0.0));
+    let multiplier = libm::pow(10.0, (sig as f64 - libm::log10(x.abs()).ceil()).max(0.0));
     let first = (x * multiplier).floor() / multiplier;
     (first * multiplier).floor() / multiplier
 }
