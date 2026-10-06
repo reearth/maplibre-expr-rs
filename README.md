@@ -230,8 +230,13 @@ that depend on CLDR tailoring are reported as *ignored* in that configuration.
 
 The crate is validated against a vendored snapshot of the upstream
 [`maplibre-style-spec`][spec] expression fixtures (`tests/fixtures/expression`;
-see `ATTRIBUTION.md` there). `tests/spec.rs` turns each fixture directory into
-one libtest case:
+see `ATTRIBUTION.md` there). The test oracle — every expected result and error
+message the harness compares against — comes from this directory at the pinned
+commit:
+
+<https://github.com/maplibre/maplibre-style-spec/tree/ef522e45a28e0efafabbebb27197d3440c99fe34/test/integration/expression/tests>
+
+`tests/spec.rs` turns each fixture directory into one libtest case:
 
 ```
 cargo test --test spec

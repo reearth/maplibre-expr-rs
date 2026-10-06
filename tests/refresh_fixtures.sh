@@ -52,5 +52,14 @@ cp -R "$TMP/spec/test/integration/expression/tests" "$DEST"
 
 update_pinned_commit "$ATTRIBUTION" "$COMMIT"
 
+# The README, CONTRIBUTING and ATTRIBUTION all link the oracle snapshot by
+# commit; rewrite those permalinks so they keep pointing at what is vendored.
+for f in "$ATTRIBUTION" "$CRATE_DIR/README.md" "$CRATE_DIR/CONTRIBUTING.md"; do
+  tmp="$(mktemp)"
+  sed -E "s|(maplibre-style-spec/tree/)[0-9a-f]{40}(/test/integration/expression/tests)|\1$COMMIT\2|g" \
+    "$f" >"$tmp"
+  mv "$tmp" "$f"
+done
+
 echo "Vendored $(find "$DEST" -name test.json | wc -l | tr -d ' ') fixtures at commit $COMMIT"
-echo "Pinned commit in tests/fixtures/ATTRIBUTION.md updated to $COMMIT"
+echo "Pinned commit and oracle URLs updated to $COMMIT"

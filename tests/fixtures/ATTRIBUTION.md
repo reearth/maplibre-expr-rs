@@ -7,6 +7,7 @@ tests from the [MapLibre style specification][repo], vendored here so the
 - **Source**: <https://github.com/maplibre/maplibre-style-spec>
 - **Path in source**: `test/integration/expression/tests`
 - **Pinned commit**: `ef522e45a28e0efafabbebb27197d3440c99fe34`
+- **Snapshot URL**: <https://github.com/maplibre/maplibre-style-spec/tree/ef522e45a28e0efafabbebb27197d3440c99fe34/test/integration/expression/tests>
 - **License**: BSD-3-Clause — Copyright (c) 2020, MapLibre contributors
 
 To refresh, re-run `tests/refresh_fixtures.sh`.

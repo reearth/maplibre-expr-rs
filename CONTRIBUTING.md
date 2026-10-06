@@ -32,7 +32,8 @@ cargo fmt --all -- --check
 ```
 
 The conformance suite lives under `tests/fixtures/` and is derived from the
-upstream MapLibre expression test data. It is the primary correctness gate:
+upstream MapLibre expression test data
+([snapshot at the pinned commit][oracle]). It is the primary correctness gate:
 **any change that breaks a fixture must include a clear justification.**
 
 ## Pull request guidelines
@@ -59,4 +60,5 @@ license.
 
 [spec]: https://maplibre.org/maplibre-style-spec/expressions/
 [gl-js]: https://github.com/maplibre/maplibre-gl-js
+[oracle]: https://github.com/maplibre/maplibre-style-spec/tree/ef522e45a28e0efafabbebb27197d3440c99fe34/test/integration/expression/tests
 [ai-policy]: https://github.com/maplibre/maplibre/blob/main/AI_POLICY.md
