@@ -16,7 +16,7 @@ please link to it.
 
 **Describe alternatives you've considered**
 Other approaches, or workarounds you tried (e.g. `Options::macro_def` /
-`Options::function` / `Options::native`).
+`Options::expr_fn` / `Options::external`).
 
 **Additional context**
 Add any other context or screenshots about the feature request here.
